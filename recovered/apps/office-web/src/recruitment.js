@@ -27,8 +27,8 @@ const localDateTime = (value) => {
 const emptyData = () => ({ candidates: [], requests: [], applications: [], tasks: [], events: [], recruiters: [], contacts: [], workflowEvents: [], workflowOperators: [] });
 const mergeById = (oldItems = [], newItems = []) => [...new Map([...oldItems, ...newItems].map(item => [item.id, item])).values()];
 const pageData = result => ({ ...emptyData(), ...result, candidates: (result.items || []).map(item => item.candidate), applications: (result.items || []).flatMap(item => item.applications || []), tasks: (result.items || []).flatMap(item => item.tasks || []) });
-const scopeLabel = (scope) => [scope.projectName, scope.regionName, scope.scopeName].filter(Boolean).join(' · ');
 const scopeQuery = (responsibilityScopeId, values = {}) => new URLSearchParams({ ...(responsibilityScopeId ? { responsibilityScopeId } : {}), ...values }).toString();
+const accessSignature = scopes => JSON.stringify(scopes.map(item => [item.responsibilityScopeId, item.accessVersion, item.accessExpiresAt]).sort(([a], [b]) => a.localeCompare(b)));
 const safeHh = (value) => {
   try { const url = new URL(value); return url.protocol === 'https:' && !url.username && !url.password && (!url.port || url.port === '443') && (url.hostname === 'hh.ru' || url.hostname.endsWith('.hh.ru')) ? url.href : null; } catch { return null; }
 };
@@ -243,11 +243,10 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     const operator = ['manager', 'dispatcher', 'access_admin'].includes(actor?.role);
     const change = (key, next) => setForm((current) => ({ ...current, value: { ...current.value, [key]: next,
       ...(key === 'candidateId' && current.type === 'tasks' ? { applicationId: '' } : {}),
-      ...(key === 'responsibilityScopeId' && ['access', 'invitation'].includes(current.type) ? { requestIds: [], ...(current.type === 'access' ? { userId: '' } : {}) } : {}),
+      ...(key === 'targetRequestId' ? { responsibilityScopeId: data.requests.find(item => item.id === next)?.responsibilityScopeId || '', ...(['access', 'invitation'].includes(current.type) ? { requestIds: next ? [next] : [] } : {}), ...(current.type === 'access' ? { userId: '' } : {}) } : {}),
     } }));
     const accountScopes = scopes.filter(scope => actor.grants?.some(grant => grant.responsibilityScopeId === scope.responsibilityScopeId));
-    const projectChoices = ['account', 'attach'].includes(form.type) ? accountScopes : scopes;
-    const formScope = scopes.find(item => item.responsibilityScopeId === value.responsibilityScopeId);
+    const targetRequests = data.requests.filter(item => !['account', 'attach'].includes(form.type) || accountScopes.some(scope => scope.responsibilityScopeId === item.responsibilityScopeId));
     const companyId = item => item?.legalEntityId || scopes.find(scope => scope.responsibilityScopeId === item?.responsibilityScopeId)?.legalEntityId;
     const accessRequests = data.requests.filter(item => item.responsibilityScopeId === value.responsibilityScopeId);
     const text = (key, options = {}) => h('input', { type: 'text', value: value[key] ?? '', onChange: (event) => change(key, event.target.value), ...options });
@@ -309,10 +308,11 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     ];
     if (form.type === 'applications') {
       const selectedCandidate = data.candidates.find((candidate) => candidate.id === value.candidateId);
-      const requests = data.requests.filter((item) => item.id === value.requestId || (item.status !== 'closed' && (!selectedCandidate || (item.kind === selectedCandidate.kind && companyId(item) === companyId(selectedCandidate)))));
+      const selectedRequest = data.requests.find(item => item.id === value.requestId);
+      const requests = data.requests.filter((item) => item.id === value.requestId || (item.status !== 'closed' && (!selectedCandidate || (item.kind === selectedCandidate.kind && companyId(item) === companyId(selectedCandidate) && (!external || item.responsibilityScopeId === selectedCandidate.responsibilityScopeId)))));
       fields = [
-        field('Кандидат', select('candidateId', [['', 'Выберите кандидата'], ...data.candidates.filter((item) => !item.archived || item.id === value.candidateId).map((item) => [item.id, `${item.fullName} · ${item.city}`])], { required: true, disabled: value.version > 0 }), null, true),
-        field('Потребность', select('requestId', [['', 'Выберите потребность'], ...requests.map((item) => [item.id, `${item.title} · ${scopes.find(scope => scope.responsibilityScopeId === item.responsibilityScopeId)?.projectName || item.city}`])], { required: true, disabled: value.version > 0 }), 'Тип кандидата и потребности должен совпадать.', true),
+        field('Кандидат', select('candidateId', [['', 'Выберите кандидата'], ...data.candidates.filter((item) => (!item.archived || item.id === value.candidateId) && (!external || !selectedRequest || item.responsibilityScopeId === selectedRequest.responsibilityScopeId)).map((item) => [item.id, `${item.fullName} · ${item.city}`])], { required: true, disabled: value.version > 0 }), null, true),
+        field('Потребность', select('requestId', [['', 'Выберите потребность'], ...requests.map((item) => [item.id, `${item.title} · ${item.city}`])], { required: true, disabled: value.version > 0 }), 'Тип кандидата и потребности должен совпадать.', true),
         field('Этап подбора', select('stage', STAGES)), !external && field('Рекрутер', select('recruiterId', [['', 'Выберите рекрутера'], ...recruiters], { required: true })),
         field('Дата выхода в работу', text('startDate', { type: 'date', required: value.stage === 'hired' }), 'Плановая дата. Фактический выход подтверждается отдельно.', true),
         field(value.stage === 'rejected' ? 'Причина отказа' : 'Комментарий к этапу', React.cloneElement(area('reason', 1000), { required: value.stage === 'rejected' }), null, true),
@@ -358,7 +358,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         h('div', { className: 'recruitment-actions' }, button('Выбрать все текущие потребности', () => change('requestIds', accessRequests.map((item) => item.id)), { className: 'recruitment-text-button' }), button('Снять выбор', () => change('requestIds', []), { className: 'recruitment-text-button' }), h('span', { className: 'recruitment-meta' }, `Выбрано: ${value.requestIds.length} из ${accessRequests.length}`)),
         h('p', { className: 'recruitment-meta' }, 'Новые потребности не добавляются автоматически. Для них компания обновляет назначение.'),
         ...accessRequests.map((item) => h('label', { className: 'recruitment-check', key: item.id }, h('input', { type: 'checkbox', checked: value.requestIds.includes(item.id), onChange: (event) => change('requestIds', event.target.checked ? [...value.requestIds, item.id] : value.requestIds.filter((id) => id !== item.id)) }), h('span', null, item.title, h('small', null, `${item.city} · ${kindName(item.kind)} · ${quantityLabel(item.quantity)} · ${({ open: 'Открыта', paused: 'Пауза', closed: 'Закрыта' })[item.status]}`))))),
-      !accessRequests.length && h('p', { className: 'recruitment-meta is-wide' }, 'Сначала создайте потребность в этом проекте.'),
+      !accessRequests.length && h('p', { className: 'recruitment-meta is-wide' }, 'Сначала создайте потребность.'),
       form.type === 'invitation' && h('p', { className: 'recruitment-meta is-wide' }, 'Приглашение одноразовое: 7 дней на вход, но не дольше выбранного срока доступа.'),
     ];
     if (form.type === 'invitation' && value.invitationUrl) fields = [
@@ -374,10 +374,11 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       value.issuedPassword ? h('div', { className: 'recruitment-credentials is-wide' }, h('strong', null, 'Данные для входа'), h('span', null, `Телефон: ${value.phone}`), h('code', null, value.issuedPassword), h('p', null, 'Сохраните пароль и передайте рекрутеру лично. После закрытия окна пароль больше не показывается.'), button('Назначить потребности', () => onAssignAccess(value.createdEmployeeId, value.responsibilityScopeId), { className: 'button recruitment-primary' }))
         : field('Телефон для входа', text('phone', { type: 'tel', required: true, maxLength: 30, placeholder: '+7 900 000-00-00' }), 'На следующем шаге появится пароль. Сообщения не отправляются.', true),
     ] : [field('Имя внешнего рекрутера', text('displayName', { required: true, maxLength: 160, autoComplete: 'name' }), null, true), h('p', { className: 'recruitment-meta is-wide' }, 'Шаг 1 — создать личный аккаунт. Шаг 2 — выдать пароль. Шаг 3 — выбрать потребности и срок доступа.')];
-    if (form.type === 'attach') fields = [field('Личный аккаунт рекрутера', select('userId', [['', 'Выберите аккаунт'], ...form.accounts.filter(person => !accessData.users.some(item => item.id === person.id && item.responsibilityScopeId === value.responsibilityScopeId)).map((person) => [person.id, person.displayName])], { required: true }), 'Используется существующий телефон и пароль. Новый аккаунт создавать не нужно.', true), h('p', { className: 'recruitment-meta is-wide' }, 'После подключения выберите потребности этого проекта и срок доступа. До назначения рекрутер не увидит проект.')];
-    if (!external && ['requests', 'access', 'invitation', 'account', 'attach'].includes(form.type) && !value.invitationUrl && !value.createdEmployeeId) {
-      fields.unshift(field('Проект', select('responsibilityScopeId', projectChoices.map(item => [item.responsibilityScopeId, scopeLabel(item)]), { required: true, disabled: Boolean(value.version) }), form.type === 'requests' ? 'Проект этой потребности. Кандидаты остаются в общей базе компании.' : 'Проект назначаемых потребностей.', true));
+    if (form.type === 'attach') fields = [field('Личный аккаунт рекрутера', select('userId', [['', 'Выберите аккаунт'], ...form.accounts.filter(person => !accessData.users.some(item => item.id === person.id && item.responsibilityScopeId === value.responsibilityScopeId)).map((person) => [person.id, person.displayName])], { required: true }), 'Используется существующий телефон и пароль. Новый аккаунт создавать не нужно.', true), h('p', { className: 'recruitment-meta is-wide' }, 'После подключения выберите потребности и срок доступа. До назначения рекрутер не увидит потребности.')];
+    if (!external && ['access', 'invitation', 'account', 'attach'].includes(form.type) && !value.version && !value.invitationUrl && !value.createdEmployeeId && targetRequests.length) {
+      fields.unshift(field('Основная потребность', select('targetRequestId', targetRequests.map(item => [item.id, `${item.title} · ${item.city}`]), { required: true }), 'Выберите потребность, для которой подключаете рекрутера.', true));
     }
+    if (external && form.type === 'candidates' && !value.version && scopes.length > 1) fields.unshift(field('Потребность для подбора', select('targetRequestId', data.requests.map(item => [item.id, `${item.title} · ${item.city}`]), { required: true }), null, true));
     const companies = [...new Map(scopes.map(item => [item.legalEntityId, item])).values()];
     if (!external && form.type === 'candidates' && !value.version && companies.length > 1) fields.unshift(field('Компания', select('responsibilityScopeId', companies.map(item => [item.responsibilityScopeId, item.legalEntityName])), null, true));
     return h('div', { className: 'recruitment-overlay' }, h('section', { className: 'recruitment-dialog', ref, role: 'dialog', 'aria-modal': true, 'aria-labelledby': headingId },
@@ -395,7 +396,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     const operator = ['manager', 'dispatcher', 'access_admin'].includes(actor?.role);
     const canReadImport = ['manager', 'dispatcher', 'recruiter', 'access_admin'].includes(actor?.role);
     const tabs = [...TABS, ...(!external && OnboardingPanel ? [['onboarding', 'Оформление']] : []), ...(canReadImport ? [['imports', 'Импорт Excel']] : []), ...(company ? COMPANY_TABS : [])];
-    const [scopes, setScopes] = useState([]), [scopeId, setScopeId] = useState(''), [projectFilter, setProjectFilter] = useState('');
+    const [scopes, setScopes] = useState([]), [scopeId, setScopeId] = useState('');
     const [data, setData] = useState(emptyData), [contextLoading, setContextLoading] = useState(true), [loading, setLoading] = useState(false);
     const requestedScope = useRef(new URLSearchParams(window.location.search).get('recruitmentScope')).current;
     const requestedTab = useRef(new URLSearchParams(window.location.search).get('recruitmentTab')).current;
@@ -428,8 +429,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     const dirty = Boolean(onboardingDirty || stageEdit || (form && JSON.stringify(form.value) !== form.initial));
     dirtyRef.current = dirty;
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const scope = scopes.find((item) => item.responsibilityScopeId === scopeId);
-    const listScopeId = external ? scopeId : projectFilter;
+    const listScopeId = '';
     const projectName = item => scopes.find(scope => scope.responsibilityScopeId === item?.responsibilityScopeId)?.projectName || 'Проект не указан';
     const recordScope = (value, type, source = data) => {
       if (type === 'tasks' && value.version > 0) return value.responsibilityScopeId;
@@ -474,7 +474,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         if (reason.status === 401) callbacks.current.onExpired?.();
       }
       const text = reason?.status === 401 ? 'Сессия закончилась. Войдите снова.'
-        : reason?.status === 403 ? external ? 'Нет доступа к этому проекту. Доступ мог быть отозван или его срок истёк. Обратитесь к компании и обновите список проектов.' : 'Нет доступа к рекрутингу компании. Обратитесь к администратору.'
+        : reason?.status === 403 ? external ? 'Доступ к потребностям мог быть отозван или его срок истёк. Обратитесь к компании и обновите данные.' : 'Нет доступа к рекрутингу компании. Обратитесь к администратору.'
           : reason?.status === 409 ? `${reason.message || 'Запись уже изменена или такой телефон / подбор существует.'} Ваши изменения остались в форме. При конфликте версии закройте форму и обновите данные.`
             : reason?.status === 400 ? reason.message || 'Проверьте обязательные поля, телефон, ссылку https://hh.ru и даты.'
               : isForm ? 'Не удалось сохранить запись. Ваши изменения остались в форме. Проверьте соединение и повторите попытку.'
@@ -513,7 +513,6 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         appliedTaskRequest.current = taskRequest;
         clearForm(); setDetailId(null); setDemandId(null); setTab('tasks'); setTaskStatus('open');
         setGeneralFilter({ search: '', city: '', kind: '', recruiter: external ? '' : actor?.id || '' });
-        if (!external) setProjectFilter('');
         if (external && reminderScopeId && scopes.some((item) => item.responsibilityScopeId === reminderScopeId)) setScopeId(reminderScopeId);
       }
     }, [taskRequest, contextLoading, scopes, reminderScopeId, actor?.id]);
@@ -524,8 +523,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       setContextLoading(true); setError(''); setData(emptyData()); setWorklist({ items: [], total: 0, counts: {}, cities: [] }); setAccessData({ users: [], grants: [] }); setInvitations([]); setActivity(null); setDetailId(null); setDemandId(null); setScopes([]); setScopeId('');
       request('/recruitment/context', { signal: controller.signal }, token).then((result) => {
         if (!active) return;
-        setScopes(result.scopes || []); setScopeId(result.scopes?.find(item => item.responsibilityScopeId === requestedScope)?.responsibilityScopeId || result.scopes?.[0]?.responsibilityScopeId || '');
-        setProjectFilter('');
+        setScopes(result.scopes || []); setScopeId(result.scopes?.find(item => item.responsibilityScopeId === result.defaultResponsibilityScopeId)?.responsibilityScopeId || result.scopes?.find(item => item.responsibilityScopeId === requestedScope)?.responsibilityScopeId || result.scopes?.[0]?.responsibilityScopeId || '');
       }).catch((reason) => { if (active) fail(reason); }).finally(() => { if (active) setContextLoading(false); });
       return () => { active = false; controller.abort(); };
     }, [token, contextKey]);
@@ -543,7 +541,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       }
       setStageConflicts([]);
     };
-    useEffect(() => { setPage(1); }, [scopeId, projectFilter, workView, candidateFilter.search, candidateFilter.city, candidateFilter.kind, candidateFilter.recruiter, candidateFilter.source, candidateFilter.stage, showArchive, pageSize]);
+    useEffect(() => { setPage(1); }, [scopeId, workView, candidateFilter.search, candidateFilter.city, candidateFilter.kind, candidateFilter.recruiter, candidateFilter.source, candidateFilter.stage, showArchive, pageSize]);
     useEffect(() => {
       if (!scopeId) return;
       if (['imports', 'onboarding'].includes(tab)) { setLoading(false); return; }
@@ -559,7 +557,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       if (!detailId || !scopeId) return;
       const controller = new AbortController(); let active = true;
       setDetailLoading(true);
-      request(`/recruitment/candidate?${scopeQuery(external ? scopeId : '', { candidateId: detailId, contactPage: String(contactPage), contactPageSize: '50' })}`, { signal: controller.signal }, token).then(result => {
+      request(`/recruitment/candidate?${scopeQuery(external ? candidateMap.get(detailId)?.responsibilityScopeId : '', { candidateId: detailId, contactPage: String(contactPage), contactPageSize: '50' })}`, { signal: controller.signal }, token).then(result => {
         if (!active) return;
         setContactTotal(result.contactTotal || 0);
         setData(current => ({ ...current, candidates: mergeById(current.candidates, [result.candidate]), applications: mergeById(current.applications, result.applications), tasks: mergeById(current.tasks, result.tasks), events: mergeById(current.events, result.events), requests: mergeById(current.requests, result.requests), requestRecruiters: result.requestRecruiters || current.requestRecruiters, recruiters: mergeById(current.recruiters, result.recruiters), contacts: result.contacts || [], workflowEvents: result.workflowEvents || [], workflowOperators: result.workflowOperators || current.workflowOperators }));
@@ -570,7 +568,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     useEffect(() => {
       if (!scopeId) return;
       const controller = new AbortController(); let active = true;
-      request('/recruitment/visits', { method: 'POST', body: JSON.stringify(external ? { responsibilityScopeId: scopeId } : {}), signal: controller.signal }, token).catch((reason) => { if (active && [401, 403].includes(reason?.status)) fail(reason); });
+      request('/recruitment/visits', { method: 'POST', body: JSON.stringify({}), signal: controller.signal }, token).catch((reason) => { if (active && [401, 403].includes(reason?.status)) fail(reason); });
       return () => { active = false; controller.abort(); };
     }, [token, scopeId]);
     useEffect(() => {
@@ -582,10 +580,10 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         .then(([result, links]) => { if (active) { tab === 'access' ? setAccessData(result) : setActivity(result); setInvitations(links?.invitations || []); } })
         .catch((reason) => { if (active) fail(reason); }).finally(() => { if (active) setCompanyLoading(false); });
       return () => { active = false; controller.abort(); };
-    }, [token, scopeId, projectFilter, tab, days, refreshKey, company]);
+    }, [token, scopeId, tab, days, refreshKey, company]);
     useEffect(() => {
       if (!external || !scopeId) return;
-      accessVersionRef.current = { scopeId, version: scope?.accessVersion };
+      accessVersionRef.current = accessSignature(scopes);
       let controller, active = true;
       const verifyAccess = async () => {
         controller?.abort(); controller = new AbortController();
@@ -593,15 +591,17 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         try {
           const result = await request('/recruitment/context', { signal: current.signal }, token);
           if (!active || current.signal.aborted) return;
-          const currentScope = result.scopes?.find((item) => item.responsibilityScopeId === scopeRef.current);
-          if (!currentScope) { fail({ status: 403 }); return; }
-          if (accessVersionRef.current?.scopeId === scopeRef.current && currentScope.accessVersion !== accessVersionRef.current.version) {
+          const nextScopes = result.scopes || [];
+          if (!nextScopes.length) { fail({ status: 403 }); return; }
+          const signature = accessSignature(nextScopes);
+          if (signature !== accessVersionRef.current) {
             snapshotEpoch.current += 1;
             setData(emptyData()); setWorklist({ items: [], total: 0, counts: {}, cities: [] }); setDetailId(null); setDemandId(null); clearForm();
-            accessVersionRef.current = { scopeId: scopeRef.current, version: currentScope.accessVersion };
+            accessVersionRef.current = signature;
+            if (!nextScopes.some(item => item.responsibilityScopeId === scopeRef.current)) setScopeId(nextScopes[0].responsibilityScopeId);
             setRefreshKey((value) => value + 1);
           }
-          setScopes(result.scopes || []);
+          setScopes(nextScopes);
         } catch (reason) { if (active && reason?.name !== 'AbortError') fail(reason); }
       };
       const timer = setInterval(verifyAccess, 60000);
@@ -609,30 +609,30 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       return () => { active = false; controller?.abort(); clearInterval(timer); window.removeEventListener('focus', verifyAccess); };
     }, [token, scopeId, external]);
     useEffect(() => {
-      if (!external || !scope?.accessExpiresAt) return;
+      const expires = scopes.map(item => item.accessExpiresAt).filter(Boolean).map(value => new Date(value).getTime());
+      if (!external || !expires.length) return;
       let timer;
       const checkExpiry = () => {
-        const remaining = new Date(scope.accessExpiresAt).getTime() - Date.now();
-        if (remaining <= 0) { fail({ status: 403 }); return; }
+        const remaining = Math.min(...expires) - Date.now();
+        if (remaining <= 0) { setData(emptyData()); setWorklist({ items: [], total: 0, counts: {}, cities: [] }); clearForm(); setContextKey(value => value + 1); return; }
         timer = setTimeout(checkExpiry, Math.min(remaining, 2147483647));
       };
       checkExpiry();
       return () => clearTimeout(timer);
-    }, [external, scope?.accessExpiresAt]);
+    }, [external, accessSignature(scopes)]);
 
     function navigate(next) { if (saving || !confirmDiscard()) return; clearForm(); setOnboardingDirty(false); setDetailId(null); setDemandId(null); setTab(next); setMessage(''); }
-    function chooseScope(next) { if (saving || !confirmDiscard()) return; snapshotEpoch.current += 1; if (!external) { clearForm(); setDetailId(null); setDemandId(null); setProjectFilter(next); setMessage(''); return; } clearForm(); setDetailId(null); setDemandId(null); setData(emptyData()); setWorklist({ items: [], total: 0, counts: {}, cities: [] }); setAccessData({ users: [], grants: [] }); setInvitations([]); setActivity(null); setScopeId(next); setCandidateFilter({ search: '', city: '', kind: '', recruiter: '', source: '', stage: '' }); setGeneralFilter({ search: '', city: '', kind: '', recruiter: '' }); setRequestFilter({ search: '', city: '', kind: '', recruiter: '' }); setOnlyWithCandidates(false); setMessage(''); }
     async function openForm(type, record, extra = {}) {
       if (saving || !confirmDiscard()) return;
       if (external && ['requests', 'access', 'account', 'invitation'].includes(type)) return;
       if (['access', 'account'].includes(type) && !company) return;
       if (type === 'invitation' && actor?.role !== 'access_admin') return;
       let catalog = data, accessCatalog = accessData;
-      if (['applications', 'tasks', 'access', 'invitation'].includes(type)) {
+      if (['applications', 'tasks', 'access', 'invitation', 'account'].includes(type)) {
         const currentScope = scopeId;
         savingRef.current = true; setSaving(true); setError('');
         try {
-          const [records, permissions] = await Promise.all([request(`/recruitment?${scopeQuery(external ? scopeId : '')}`, {}, token), type === 'access' ? request('/recruitment/access', {}, token) : null]);
+          const [records, permissions] = await Promise.all([request('/recruitment', {}, token), type === 'access' ? request('/recruitment/access', {}, token) : null]);
           catalog = { ...emptyData(), ...records };
           if (permissions) accessCatalog = permissions;
           if (!mounted.current || scopeRef.current !== currentScope) return;
@@ -641,7 +641,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       }
       const eligibleRecruiters = type === 'requests' ? catalog.requestRecruiters || catalog.recruiters : catalog.recruiters;
       const recruiterId = external || eligibleRecruiters.some((person) => person.id === actor?.id) ? actor.id : eligibleRecruiters[0]?.id || '';
-      const preferredScope = projectFilter || scopeId;
+      const preferredScope = scopeId;
       const targetScope = type === 'account' ? scopes.find(item => item.responsibilityScopeId === preferredScope && actor.grants?.some(grant => grant.responsibilityScopeId === item.responsibilityScopeId))?.responsibilityScopeId || scopes.find(item => actor.grants?.some(grant => grant.responsibilityScopeId === item.responsibilityScopeId))?.responsibilityScopeId || '' : preferredScope;
       const targetProject = scopes.find(item => item.responsibilityScopeId === targetScope);
       const base = { id: crypto.randomUUID(), responsibilityScopeId: targetScope, version: 0 };
@@ -659,6 +659,15 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       };
       const value = { ...(record || defaults[type]), ...extra };
       value.responsibilityScopeId = recordScope(value, type, catalog) || targetScope;
+      if (!value.version && (['access', 'invitation', 'account'].includes(type) || (external && type === 'candidates'))) {
+        const available = catalog.requests.filter(item => type !== 'account' || actor.grants?.some(grant => grant.responsibilityScopeId === item.responsibilityScopeId));
+        const targetRequest = available.find(item => item.responsibilityScopeId === value.responsibilityScopeId) || available[0];
+        if (targetRequest) {
+          value.targetRequestId = targetRequest.id;
+          value.responsibilityScopeId = targetRequest.responsibilityScopeId;
+          if (type === 'invitation') value.requestIds = available.filter(item => item.responsibilityScopeId === targetRequest.responsibilityScopeId).map(item => item.id);
+        }
+      }
       if (type === 'security') {
         const application = data.applications.find(item => item.id === value.applicationId);
         value.assigneeId ||= operator ? actor.id : '';
@@ -733,6 +742,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       event.preventDefault();
       if (saving || !form) return;
       const submitted = { ...form.value, responsibilityScopeId: recordScope(form.value, form.type, form.catalog || data) || scopeId };
+      delete submitted.targetRequestId;
       if (form.type === 'access') {
         if (!submitted.userId || !submitted.requestIds.length) { setFormError('Выберите рекрутера и хотя бы одну потребность.'); return; }
         if (!submitted.expiresAtLocal || new Date(submitted.expiresAtLocal) <= new Date()) { setFormError('Укажите будущую дату окончания доступа.'); return; }
@@ -808,7 +818,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         const saved = await request(`/recruitment/${type}`, { method: 'PUT', body: JSON.stringify(submitted) }, token);
         if (!mounted.current || scopeRef.current !== submittedScope) return;
         clearForm(); setMessage('Сохранено');
-        if (type === 'candidates') setDetailId(saved.id);
+        if (type === 'candidates') { setData(current => ({ ...current, candidates: mergeById(current.candidates, [saved]) })); setDetailId(saved.id); }
         setRefreshKey((value) => value + 1);
         window.dispatchEvent(new Event('recruitment:changed'));
       } catch (reason) { if (mounted.current && scopeRef.current === submittedScope) fail(reason, true); }
@@ -840,7 +850,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       const submittedScope = scopeId;
       setSaving(true); setError('');
       try {
-        const accessCatalog = await request('/recruitment/access', {}, token);
+        const [accessCatalog, catalog] = await Promise.all([request('/recruitment/access', {}, token), request('/recruitment', {}, token)]);
         const accounts = []; let cursor = null;
         do {
           const result = await request(`/access/employees?role=external_recruiter&limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, {}, token);
@@ -850,9 +860,10 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         } while (cursor);
         const managedScopes = scopes.filter(item => actor.grants?.some(grant => grant.responsibilityScopeId === item.responsibilityScopeId));
         const eligible = accounts.filter(person => person.active && person.approved && managedScopes.some(scope => !accessCatalog.users.some(item => item.id === person.id && item.responsibilityScopeId === scope.responsibilityScopeId)));
-        if (!eligible.length) { setMessage('Нет других доступных внешних аккаунтов. Все подходящие рекрутеры уже подключены к этому проекту.'); return; }
-        const value = { userId: '', responsibilityScopeId: managedScopes.find(item => item.responsibilityScopeId === projectFilter)?.responsibilityScopeId || managedScopes[0]?.responsibilityScopeId || '' };
-        setForm({ type: 'attach', value, initial: JSON.stringify(value), accounts: eligible, accessCatalog }); setFormError('');
+        if (!eligible.length) { setMessage('Нет других доступных внешних аккаунтов. Все подходящие рекрутеры уже подключены.'); return; }
+        const targetRequest = catalog.requests.find(item => managedScopes.some(scope => scope.responsibilityScopeId === item.responsibilityScopeId));
+        const value = { userId: '', targetRequestId: targetRequest?.id || '', responsibilityScopeId: targetRequest?.responsibilityScopeId || managedScopes[0]?.responsibilityScopeId || '' };
+        setForm({ type: 'attach', value, initial: JSON.stringify(value), accounts: eligible, catalog, accessCatalog }); setFormError('');
       } catch (reason) { if (mounted.current && scopeRef.current === submittedScope) fail(reason); }
       finally { if (mounted.current) setSaving(false); }
     }
@@ -1031,7 +1042,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       }));
 
     let content;
-    if (tab === 'onboarding' && !external && OnboardingPanel) content = h(OnboardingPanel, { key: `onboarding-${refreshKey}`, token, scopes, candidates: data.candidates, initialCandidateId: onboardingCandidateId, onExpired, refreshKey, onDirtyChange: setOnboardingDirty });
+    if (tab === 'onboarding' && !external && OnboardingPanel) content = h(OnboardingPanel, { key: `onboarding-${refreshKey}`, token, scopes, defaultScopeId: scopeId, candidates: data.candidates, initialCandidateId: onboardingCandidateId, onExpired, refreshKey, onDirtyChange: setOnboardingDirty });
     if (tab === 'imports' && canReadImport) content = h(ImportRowsPanel, { token, responsibilityScopeId: listScopeId, refreshKey, onError: fail, onCandidate: candidateId => { setDetailId(candidateId); setContactPage(1); } });
     if (paginated) content = h('div', { className: 'recruitment-work-view' },
       h('div', { className: 'recruitment-work-toolbar' },
@@ -1094,11 +1105,11 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
           h('div', { className: 'recruitment-actions' }, button(grant ? state === 'active' ? 'Изменить назначение' : 'Возобновить доступ' : 'Назначить потребности', () => openForm('access', grant || null, { userId: person.id, responsibilityScopeId: person.responsibilityScopeId, ...(state !== 'active' ? { expiresAt: new Date(Date.now() + 30 * 86400000).toISOString() } : {}) }), { disabled: saving || !person.active || !person.approved || !data.requests.length }), grant?.status === 'active' && button('Отозвать доступ', () => revokeAccess(grant), { className: 'recruitment-text-button', disabled: saving })));
       })) : empty('Внешних рекрутеров пока нет', actor?.role === 'access_admin' ? 'Создайте ссылку-приглашение. Рекрутер сам заполнит имя, телефон и пароль, после чего появится здесь.' : 'Администратор доступа должен создать личные аккаунты внешних рекрутеров.'));
     if (tab === 'activity' && company) content = h('div', { className: 'recruitment-activity-view' },
-      h('section', { className: 'recruitment-surface' }, h('div', { className: 'recruitment-row-heading' }, h('div', null, h('h3', null, 'Активность и результат'), h('p', { className: 'recruitment-meta' }, 'Действия в компании за период, включая закрытые подборы. Можно уточнить проект фильтром.')), h('div', { className: 'recruitment-segment', 'aria-label': 'Период отчёта' }, ...[7, 30, 90].map((count) => button(`${count} дней`, () => setDays(count), { key: count, 'aria-pressed': days === count })))),
+      h('section', { className: 'recruitment-surface' }, h('div', { className: 'recruitment-row-heading' }, h('div', null, h('h3', null, 'Активность и результат'), h('p', { className: 'recruitment-meta' }, 'Действия в компании за период, включая закрытые подборы.')), h('div', { className: 'recruitment-segment', 'aria-label': 'Период отчёта' }, ...[7, 30, 90].map((count) => button(`${count} дней`, () => setDays(count), { key: count, 'aria-pressed': days === count })))),
         h('p', null, 'Просмотры без результата — повод проверить причины. Решение о доступе принимает компания.'),
         activity && h('p', { className: 'recruitment-meta' }, `Период: ${dateLabel(activity.periodStart)} — ${dateLabel(activity.periodEnd)}.`),
         h('details', { className: 'recruitment-counting-rules' }, h('summary', null, 'Как считаются показатели'),
-          h('p', null, 'Визит — открытие раздела или переход в проект. Повторные визиты и просмотры одной потребности в одной сессии за 30 минут считаются один раз. Фоновое обновление не увеличивает эти два счётчика.'),
+          h('p', null, 'Визит — открытие раздела. Повторные визиты и просмотры одной потребности в одной сессии за 30 минут считаются один раз. Фоновое обновление не увеличивает эти два счётчика.'),
           h('p', null, 'Загрузки данных учитываются сервером отдельно, включая фоновое обновление. Действия в этом отчёте относятся к тому, кто их выполнил; результаты закреплённого за рекрутером подбора показаны в «Аналитике».'),
           activity?.metricDefinitions?.activeDays && h('p', null, activity.metricDefinitions.activeDays),
           h('p', null, 'Контакты — сохранённые результаты связи и новые обращения за период. Они учитываются как содержательная работа с кандидатом.'),
@@ -1117,13 +1128,11 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       h('header', { className: 'recruitment-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, 'КОМАНДА И ПОДБОР'), h('h1', null, 'Рекрутинг'), h('p', null, 'Общая база кандидатов и потребностей компании.')), h('div', { className: 'recruitment-heading-actions' },
         hhLink('https://hh.ru/employer', 'Открыть hh ↗'), button('Обновить', () => { if (confirmDiscard()) { clearForm(); scopeId ? setRefreshKey((value) => value + 1) : setContextKey((value) => value + 1); } }, { disabled: contextLoading || loading || saving }))),
       external && h('div', { className: 'recruitment-observation-notice', role: 'note' }, h('strong', null, 'Компания видит вашу активность'), h('p', null, 'Учитываются входы в раздел, загрузки данных, просмотры потребностей и действия по подбору. Вы видите назначенные потребности и своих кандидатов.')),
-      contextLoading ? h('div', { className: 'recruitment-loading', role: 'status' }, 'Загружаем доступные проекты…') : !scopes.length && !error ? empty('Рекрутинг недоступен', external ? 'Компания должна назначить вам потребности и срок доступа. После назначения обновите список проектов.' : 'Администратор должен предоставить доступ к рекрутингу и персональным данным компании.') : null,
+      contextLoading ? h('div', { className: 'recruitment-loading', role: 'status' }, 'Загружаем рекрутинг…') : !scopes.length && !error ? empty('Рекрутинг недоступен', external ? 'Компания должна назначить вам потребности и срок доступа. После назначения обновите данные.' : 'Администратор должен предоставить доступ к рекрутингу и персональным данным компании.') : null,
       error && h('div', { className: 'recruitment-error', role: 'alert' }, error),
       message && h('div', { className: 'recruitment-feedback', role: 'status' }, message),
       scopes.length > 0 && h(React.Fragment, null,
-        external && h('div', { className: 'recruitment-scope-row' }, field('Проект', h('select', { value: scopeId, disabled: saving, onChange: (event) => chooseScope(event.target.value) }, ...scopes.map((item) => h('option', { key: item.responsibilityScopeId, value: item.responsibilityScopeId }, scopeLabel(item))))), h('p', { className: 'recruitment-meta' }, 'Назначенные вам потребности и ваши кандидаты.')),
         h('nav', { className: 'recruitment-tabs', 'aria-label': 'Разделы рекрутинга' }, ...tabs.map(([id, name]) => button(name, () => navigate(id), { key: id, 'aria-pressed': tab === id, disabled: saving }))),
-        !external && tab !== 'onboarding' && scopes.length > 1 && h('div', { className: 'recruitment-project-filter' }, field('Фильтр по проекту', h('select', { value: projectFilter, disabled: saving || Boolean(stageEdit), onChange: event => chooseScope(event.target.value) }, h('option', { value: '' }, 'Все проекты компании'), ...scopes.map(item => h('option', { key: item.responsibilityScopeId, value: item.responsibilityScopeId }, scopeLabel(item)))))),
         !['access', 'activity', 'imports', 'onboarding'].includes(tab) && h('div', { className: 'recruitment-filters' },
           field('Поиск', h('input', { type: 'search', value: filter.search, disabled: Boolean(stageEdit) || saving, placeholder: tab === 'requests' ? 'Название потребности' : 'Имя, телефон, потребность', onChange: (event) => setFilter({ ...filter, search: event.target.value }) })),
           field(tab === 'requests' ? 'Город потребности' : 'Город кандидата', h('select', { value: filter.city, disabled: Boolean(stageEdit) || saving, onChange: (event) => setFilter({ ...filter, city: event.target.value }) }, h('option', { value: '' }, 'Все города'), ...cities.map((city) => h('option', { key: city, value: city }, city)))),

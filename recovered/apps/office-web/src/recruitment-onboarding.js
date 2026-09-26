@@ -401,7 +401,6 @@ export function createRecruitmentOnboarding(
   }
   function TemplateEditor({
     initial,
-    scopes,
     busy,
     onSave,
     onCancel,
@@ -516,23 +515,6 @@ export function createRecruitmentOnboarding(
             "Тип оформления",
             select(draft.employmentType, EMPLOYMENT, (value) =>
               update("employmentType", value),
-            ),
-          ),
-          field(
-            "Проект формы",
-            select(
-              draft.responsibilityScopeId,
-              [
-                ["", "Выберите проект"],
-                ...scopes.map((scope) => [
-                  scope.responsibilityScopeId,
-                  [scope.projectName, scope.regionName, scope.scopeName]
-                    .filter(Boolean)
-                    .join(" · "),
-                ]),
-              ],
-              (value) => update("responsibilityScopeId", value),
-              { required: true, disabled: Boolean(initial.version) },
             ),
           ),
           field(
@@ -1206,6 +1188,7 @@ export function createRecruitmentOnboarding(
   function OnboardingPanel({
     token,
     scopes = [],
+    defaultScopeId = "",
     candidates = [],
     initialCandidateId = "",
     onExpired,
@@ -1343,18 +1326,20 @@ export function createRecruitmentOnboarding(
     }
     const templates = context?.templates || [],
       sessions = context?.sessions || [];
-    const activeTemplates = templates.filter((item) => item.active);
+    const candidateChoices = [
+      ...new Map(
+        [...candidates, ...candidateResults].map((item) => [item.id, item]),
+      ).values(),
+    ];
+    const selectedCandidate = candidateChoices.find(item => item.id === candidateId);
+    const selectedCompany = selectedCandidate?.legalEntityId || scopes.find(scope => scope.responsibilityScopeId === selectedCandidate?.responsibilityScopeId)?.legalEntityId;
+    const activeTemplates = templates.filter((item) => item.active && (!selectedCompany || scopes.find(scope => scope.responsibilityScopeId === item.responsibilityScopeId)?.legalEntityId === selectedCompany));
     const available = activeTemplates.filter(
       (item) =>
         (!direction || item.destination === direction) &&
         (!employmentType || item.employmentType === employmentType),
     );
     const selectedTemplate = available.find((item) => item.id === templateId);
-    const candidateChoices = [
-      ...new Map(
-        [...candidates, ...candidateResults].map((item) => [item.id, item]),
-      ).values(),
-    ];
     const photos = sessions.flatMap((item) =>
       (item.photos || []).map((photo) => ({
         ...photo,
@@ -1562,7 +1547,7 @@ export function createRecruitmentOnboarding(
                                 item.fullName || item.name || "Кандидат",
                               ]),
                             ],
-                            setCandidateId,
+                            (value) => { setCandidateId(value); setTemplateId(""); },
                           ),
                         ),
                       ),
@@ -1588,7 +1573,11 @@ export function createRecruitmentOnboarding(
                       ),
                     )
                   : notice(
-                      context.canManageTemplates
+                      selectedCandidate
+                        ? context.canManageTemplates
+                          ? "Для выбранного кандидата пока нет опубликованной формы. Создайте и опубликуйте форму в конструкторе."
+                          : "Для выбранного кандидата пока нет опубликованной формы. Обратитесь к руководителю."
+                        : context.canManageTemplates
                         ? "Сначала создайте и опубликуйте форму в конструкторе."
                         : "Пока нет опубликованных форм. Обратитесь к руководителю.",
                     ),
@@ -1667,7 +1656,6 @@ export function createRecruitmentOnboarding(
           ? h(TemplateEditor, {
               key: templateDraft.id,
               initial: templateDraft,
-              scopes,
               busy,
               onSave: saveTemplate,
               onCancel: () => {
@@ -1689,7 +1677,7 @@ export function createRecruitmentOnboarding(
                   "Создать форму",
                   () =>
                     setTemplateDraft(
-                      newTemplate(scopes[0]?.responsibilityScopeId),
+                      newTemplate(selectedCandidate?.responsibilityScopeId || defaultScopeId || scopes[0]?.responsibilityScopeId),
                     ),
                   primary,
                 ),

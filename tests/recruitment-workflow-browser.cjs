@@ -243,4 +243,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ ok: true, checks: ['one candidate section', 'default own candidates', 'shared server pagination', 'one person and two applications', 'unassigned candidates on board', 'shared filters and queues', 'archive in both views', 'no full snapshot', 'contact and next action', 'security assignment and protected tasks', 'confirmed start', 'repeat inquiry', 'list and board mobile width'], output }));
   } finally { if (browser) await browser.close(); await fixture.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

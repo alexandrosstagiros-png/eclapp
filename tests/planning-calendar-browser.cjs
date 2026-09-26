@@ -11,8 +11,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const f = await createTestServer({ builtFrontend: process.env.PLANNING_BUILT_FRONTEND === 'true' });
   let browser, page;
   const out = path.resolve(__dirname, '../.local/planning-calendar-qa');
-  await fs.mkdir(out, { recursive: true });
   try {
+    await fs.mkdir(out, { recursive: true });
     const dates = ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08'];
     await f.adminPool.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=ANY($1::uuid[])', [[f.ids.admin, f.ids.dispatcher]]);
     await f.adminPool.query("UPDATE users SET role='manager',display_name='Менеджер календаря' WHERE id=$1", [f.ids.dispatcher]);
@@ -172,13 +172,15 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     // Revocation clears detailed plans and disables any further manipulation.
     await f.adminPool.query('UPDATE access_grants SET personal_data_visible=false WHERE user_id=$1', [f.ids.dispatcher]);
     await calendar.getByRole('button', { name: 'Обновить', exact: true }).click();
-    await page.getByText(/нет доступа к планированию/i).first().waitFor();
+    await page.getByRole('alert').filter({ hasText: 'У вас нет доступа к этому плану.' }).waitFor();
     assert.equal(await page.locator('.planning-cal-trip').count(), 0);
     assert.equal(await page.getByRole('tooltip').count(), 0);
+    assert.equal(await page.getByRole('button', { name: 'Сохранить календарь', exact: true }).count(), 0);
+    assert.equal(await page.getByText('Мой несохранённый вариант', { exact: true }).count(), 0);
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ managerLogin: 'passed', hoverDetails: 'passed', pointerFillBothAxes: 'passed', historicalSourceForm: 'passed', dayCopy: 'passed', inlineEdit: 'passed', atomicSave: 'passed', persistedReload: 'passed', mobileOverflow: false, monthAndVehicleViews: 'passed', keyboardCopyPasteUndo: 'passed', conflictRetainsDraft: 'passed', revokedAccessClearsData: 'passed', javascriptErrors: 0, builtFrontend: process.env.PLANNING_BUILT_FRONTEND === 'true', screenshots: out }));
   } catch (error) {
     if (page) await page.screenshot({ path: path.join(out, 'failure.png'), fullPage: true }).catch(() => {});
     throw error;
   } finally { if (browser) await browser.close(); await f.close(); }
-})().catch(error => { console.error(error.stack); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack); process.exit(1); });

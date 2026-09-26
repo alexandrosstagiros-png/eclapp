@@ -592,13 +592,13 @@ class TeamOrganizationTasksService {
       }
       const rows = await client.query(
         `SELECT ${TASK_COLUMNS} FROM team_tasks WHERE ${whereScope()} AND ($5::boolean OR author_id=$6 OR assignee_id=ANY($7::uuid[]))
-        AND ($8::timestamptz IS NULL OR (updated_at,id)<($8::timestamptz,$9::uuid)) ORDER BY updated_at DESC,id DESC LIMIT 101`,
+        AND ($8::uuid IS NULL OR (updated_at,id)<(SELECT updated_at,id FROM team_tasks WHERE id=$8)) ORDER BY updated_at DESC,id DESC LIMIT 101`,
         [
           ...tuple(scope),
           canManage(actor),
           actor.id,
           accessible,
-          before?.updatedAt || null,
+          // Resolve the validated cursor in PostgreSQL: JS Date loses microseconds.
           before?.id || null,
         ],
       );

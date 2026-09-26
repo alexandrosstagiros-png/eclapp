@@ -84,4 +84,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log('PASS attachments browser: multiple selection/removal, draft preservation across chats and failure, text+file and file-only thread, exact byte downloads, persistence, mobile');
   } finally { if (browser) await browser.close(); await fixture.close(); }
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack || error.message); process.exit(1); });

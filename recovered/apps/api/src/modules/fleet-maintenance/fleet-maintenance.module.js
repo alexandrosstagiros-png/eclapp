@@ -150,7 +150,10 @@ class FleetMaintenanceService {
         JOIN projects p ON p.id=g.project_id AND p.legal_entity_id=g.legal_entity_id AND p.region_id=g.region_id
         JOIN responsibility_scopes rs ON rs.id=g.responsibility_scope_id AND rs.project_id=g.project_id
         WHERE g.user_id=$1 AND g.finance_visible=true ORDER BY r.name,p.name,rs.name,g.responsibility_scope_id`, [actor.id]);
-      return { scopes: result.rows.map(row => ({ ...row, canWrite: WRITE_ROLES.includes(actor.role) })) };
+      const scopes = result.rows.map(row => ({ ...row, canWrite: WRITE_ROLES.includes(actor.role) }));
+      const populated = (await client.query(`SELECT responsibility_scope_id AS id FROM fleet_maintenance_state WHERE responsibility_scope_id=ANY($1::uuid[]) AND active_dataset_id IS NOT NULL
+        UNION SELECT responsibility_scope_id AS id FROM fleet_ops_records WHERE responsibility_scope_id=ANY($1::uuid[])`, [scopes.map(scope => scope.responsibilityScopeId)])).rows;
+      return { scopes, defaultResponsibilityScopeId: scopes.find(scope => populated.some(row => row.id === scope.responsibilityScopeId))?.responsibilityScopeId || scopes[0]?.responsibilityScopeId || null };
     });
   }
   async scoped(supplied, scopeId, write, fn) {
@@ -163,7 +166,63 @@ class FleetMaintenanceService {
   }
   filters(input) { try { return validateFilters(input || {}); } catch (error) { inputError(error, 'Проверьте фильтры и границы периода.'); } }
   calculation(rows, filters, links) { try { return analyze(rows, filters, links); } catch (error) { inputError(error, 'Не удалось рассчитать выборку. Проверьте исходные суммы и фильтры.'); } }
+  async company(supplied, fn) {
+    return this.database.transaction(async client => {
+      const actor = await this.current(client, supplied);
+      const scopes = [...new Set(actor.grants.filter(grant => grant.financeVisible === true).map(grant => grant.responsibilityScopeId))]
+        .sort().map(id => this.scope(actor, id));
+      if (!scopes.length) denied();
+      const contexts = [];
+      for (const scope of scopes) {
+        await this.lockScope(client, scope);
+        const state = await this.state(client, scope);
+        const source = await this.source(client, scope, state.activeDatasetId);
+        const combined = await this.collectRows(client, scope, source);
+        contexts.push({ scope, state, source, combined });
+      }
+      return fn(client, contexts);
+    });
+  }
+  companyRows(contexts) {
+    return contexts.flatMap(({ scope, state, combined }) => selectRows(combined.rows, {}, state.links).map(row => ({
+      ...row, responsibilityScopeId: scope.responsibilityScopeId,
+      companyVehicleIdentity: { key: row.vehicleKey, plate: row.canonicalPlate },
+      companyOrderKey: `${scope.responsibilityScopeId}:${row.orderId}`,
+    })));
+  }
+  companyDataset(contexts) {
+    const sources = contexts.filter(context => context.source).map(context => dataset(context.source));
+    if (!sources.length) return null;
+    if (sources.length === 1) return sources[0];
+    return { ...sources[0], id: null, fileName: `Все загруженные источники (${sources.length})`,
+      rowCount: sources.reduce((sum, source) => sum + source.rowCount, 0),
+      createdAt: sources.map(source => source.createdAt).sort().at(-1) };
+  }
+  companyReconciliation(contexts) {
+    const values = contexts.map(({ scope, state, source }) => ({ scope, value: reconcile(source?.payload.reconciliation || null, source?.payload.rows || [], state.links) }));
+    const snapshots = values.filter(({ value }) => value.kind === 'partial_snapshot');
+    if (!snapshots.length) return values[0]?.value || { kind: 'absent', rows: [] };
+    const summary = {};
+    for (const { value } of snapshots) for (const [key, amount] of Object.entries(value.summary || {})) summary[key] = (summary[key] || 0) + amount;
+    return { ...snapshots[0].value, summary, rows: snapshots.flatMap(({ scope, value }) => value.rows.map(row => ({ ...row, key: `${scope.responsibilityScopeId}:${row.key}` }))) };
+  }
   async read(supplied, query) {
+    if (query.responsibilityScopeId === 'company') return this.company(supplied, async (client, contexts) => {
+      const rows = this.companyRows(contexts), filters = this.filters(query);
+      const scopeIdsByPlate = {};
+      for (const row of rows) {
+        const plate = normalizePlate(row.plate);
+        if (plate && !(scopeIdsByPlate[plate] ||= []).includes(row.responsibilityScopeId)) scopeIdsByPlate[plate].push(row.responsibilityScopeId);
+      }
+      return { dataset: this.companyDataset(contexts), version: 0,
+        scopeIdsByPlate,
+        versionsByScope: Object.fromEntries(contexts.map(({ scope, state }) => [scope.responsibilityScopeId, state.version])),
+        activeDatasetIds: contexts.map(({ state }) => state.activeDatasetId).filter(Boolean),
+        activeDatasetScopeIds: contexts.filter(({ source }) => source).map(({ scope }) => scope.responsibilityScopeId),
+        links: contexts.flatMap(({ scope, state }) => state.links.map(link => ({ ...link, responsibilityScopeId: scope.responsibilityScopeId }))),
+        nativeRowCount: contexts.reduce((sum, context) => sum + context.combined.nativeRowCount, 0),
+        analytics: contexts.some(context => context.source || context.combined.nativeRowCount) ? this.calculation(rows, filters, []) : null };
+    });
     return this.scoped(supplied, query.responsibilityScopeId, false, async (client, scope, actor, state) => {
       const filters = this.filters(query);
       const source = await this.source(client, scope, state.activeDatasetId);
@@ -215,6 +274,14 @@ class FleetMaintenanceService {
     });
   }
   async history(supplied, scopeId) {
+    if (scopeId === 'company') return this.company(supplied, async (client, contexts) => {
+      const items = [];
+      for (const { scope, state } of contexts) {
+        const result = await client.query(`SELECT ${DATASET_COLUMNS} FROM fleet_maintenance_datasets WHERE ${where()} ORDER BY created_at DESC,id`, tuple(scope));
+        items.push(...result.rows.map(row => ({ ...dataset(row), responsibilityScopeId: scope.responsibilityScopeId, version: state.version })));
+      }
+      return { items: items.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt))) };
+    });
     return this.scoped(supplied, scopeId, false, async (client, scope, actor, state) => {
       const result = await client.query(`SELECT ${DATASET_COLUMNS} FROM fleet_maintenance_datasets WHERE ${where()} ORDER BY created_at DESC,id`, tuple(scope));
       return { items: result.rows.map(dataset) };
@@ -249,6 +316,7 @@ class FleetMaintenanceService {
     });
   }
   async reconciliation(supplied, scopeId) {
+    if (scopeId === 'company') return this.company(supplied, async (client, contexts) => this.companyReconciliation(contexts));
     return this.scoped(supplied, scopeId, false, async (client, scope, actor, state) => {
       const source = await this.source(client, scope, state.activeDatasetId);
       try { return reconcile(source?.payload.reconciliation || null, source?.payload.rows || [], state.links); }
@@ -256,6 +324,12 @@ class FleetMaintenanceService {
     });
   }
   async export(supplied, query) {
+    if (query.responsibilityScopeId === 'company') return this.company(supplied, async (client, contexts) => {
+      const rows = selectRows(this.companyRows(contexts), this.filters(query), []);
+      const lines = [EXPORT_FIELDS.map(([label]) => csvCell(label)).join(';')];
+      for (const row of rows) lines.push(EXPORT_FIELDS.map(([, field, numeric]) => csvCell(typeof field === 'function' ? field(row) : row[field], numeric)).join(';'));
+      return Buffer.from(`\uFEFF${lines.join('\r\n')}\r\n`, 'utf8');
+    });
     return this.scoped(supplied, query.responsibilityScopeId, false, async (client, scope, actor, state) => {
       const filters = this.filters(query);
       const source = await this.source(client, scope, state.activeDatasetId);
@@ -269,6 +343,15 @@ class FleetMaintenanceService {
     });
   }
   async report(supplied, query) {
+    if (query.responsibilityScopeId === 'company') return this.company(supplied, async (client, contexts) => {
+      const analytics = this.calculation(this.companyRows(contexts), this.filters(query), []);
+      const records = {};
+      for (const { combined } of contexts) for (const [kind, rows] of Object.entries(combined.records)) (records[kind] ||= []).push(...rows);
+      const vehicles = new Map((records.vehicles || []).map(row => [row.id, row]));
+      const operations = { records, maintenance: (records.maintenance || []).map(row => maintenanceStatus(row, vehicles.get(row.vehicleId))) };
+      const { generateFleetReport } = require('./fleet-report');
+      return generateFleetReport({ analytics, dataset: this.companyDataset(contexts), scope: { scopeName: 'Компания' }, reconciliation: this.companyReconciliation(contexts), operations });
+    });
     return this.scoped(supplied, query.responsibilityScopeId, false, async (client, scope, actor, state) => {
       const filters = this.filters(query), source = await this.source(client, scope, state.activeDatasetId);
       const combined = await this.collectRows(client, scope, source);

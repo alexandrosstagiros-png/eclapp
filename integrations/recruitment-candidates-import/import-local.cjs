@@ -116,31 +116,42 @@ function compilePlan(batch, resolution) {
 
 async function inspectDatabase(client, compiled, batch, actorId, { lock = false } = {}) {
   const suffix = lock ? ' FOR UPDATE' : '';
-  const user = (await client.query('SELECT id,role,active,approved FROM users WHERE id=$1' + suffix, [uuid(actorId)])).rows[0];
+  if (lock) {
+    // Match the API's identity -> company -> scope lock order. Take all user
+    // locks together before a recruiter request can wait on our company lock.
+    await client.query('SELECT id FROM users WHERE id=ANY($1::uuid[]) ORDER BY id FOR NO KEY UPDATE',
+      [[uuid(actorId), ...new Set(compiled.records.map(item => item.payload.recruiterId))]]);
+  }
+  const user = (await client.query('SELECT id,role,active,approved FROM users WHERE id=$1', [uuid(actorId)])).rows[0];
   if (!user?.active || !user.approved || user.role !== 'access_admin') invalid('Для импорта нужен действующий администратор.');
   const previous = (await client.query('SELECT DISTINCT source_sha256 FROM recruitment_candidate_imports WHERE document_id=$1', [batch.source.documentId])).rows;
   if (previous.some(row => row.source_sha256 !== batch.source.sha256)) invalid('Этот источник уже импортирован из другого снимка. Сверьте изменения и перемещения строк отдельно.');
   const scopes = new Map(), candidates = new Map(), phones = new Map(), applications = new Map();
+  for (const scopeId of [...new Set(compiled.records.map(item => item.payload.responsibilityScopeId))].sort()) {
+    const scope = (await client.query(`SELECT rs.id AS responsibility_scope_id,p.id AS project_id,p.legal_entity_id,p.region_id
+      FROM responsibility_scopes rs JOIN projects p ON p.id=rs.project_id WHERE rs.id=$1`, [scopeId])).rows[0];
+    if (!scope) { scopes.set(scopeId, null); continue; }
+    const tuple = [scope.legal_entity_id, scope.region_id, scope.project_id, scopeId];
+    const grant = (await client.query(`SELECT 1 FROM access_grants WHERE ${SCOPED} AND user_id=$5 AND personal_data_visible`, [...tuple, actorId])).rowCount;
+    scopes.set(scopeId, grant ? { ...scope, tuple } : null);
+  }
+  if (lock) {
+    const authorized = [...scopes.values()].filter(Boolean);
+    for (const company of [...new Set(authorized.map(scope => scope.legal_entity_id))].sort())
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,917042025))', [`recruitment-company:${company}`]);
+    for (const scope of authorized)
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,917042025))', [`scope:${JSON.stringify(scope.tuple)}`]);
+  }
   const prepared = [];
   for (const item of compiled.records) {
     const { record, payload } = item;
     const fail = code => { compiled.problems.push({ sourceKey: record.sourceKey, code }); };
     const scopeId = payload.responsibilityScopeId;
-    if (!scopes.has(scopeId)) {
-      const scope = (await client.query(`SELECT rs.id AS responsibility_scope_id,p.id AS project_id,p.legal_entity_id,p.region_id
-        FROM responsibility_scopes rs JOIN projects p ON p.id=rs.project_id WHERE rs.id=$1`, [scopeId])).rows[0];
-      if (scope) {
-        const tuple = [scope.legal_entity_id, scope.region_id, scope.project_id, scopeId];
-        if (lock) await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,917042025))', [`scope:${JSON.stringify(tuple)}`]);
-        const grant = (await client.query(`SELECT 1 FROM access_grants WHERE ${SCOPED} AND user_id=$5 AND personal_data_visible`, [...tuple, actorId])).rowCount;
-        scopes.set(scopeId, grant ? { ...scope, tuple } : null);
-      } else scopes.set(scopeId, null);
-    }
     const scope = scopes.get(scopeId);
     if (!scope) { fail('scope_missing_or_not_authorized'); continue; }
     const participant = (await client.query(`SELECT u.id,u.role FROM users u JOIN access_grants g ON g.user_id=u.id
       WHERE g.legal_entity_id=$1 AND g.region_id=$2 AND g.project_id=$3 AND g.responsibility_scope_id=$4
-      AND g.personal_data_visible AND u.id=$5 AND u.active AND u.approved AND u.role=ANY($6::text[])${lock ? ' FOR UPDATE OF u,g' : ''}`,
+      AND g.personal_data_visible AND u.id=$5 AND u.active AND u.approved AND u.role=ANY($6::text[])`,
     [...scope.tuple, payload.recruiterId, [...STAFF, 'external_recruiter']])).rows[0];
     if (!participant) { fail('recruiter_missing_or_not_authorized'); continue; }
     if (participant.role === 'external_recruiter') {
@@ -158,8 +169,8 @@ async function inspectDatabase(client, compiled, batch, actorId, { lock = false 
     if (!existing) existing = (await client.query(`SELECT id,phone,kind,recruiter_id,archived,${'legal_entity_id,region_id,project_id,responsibility_scope_id'} FROM recruitment_candidates WHERE id=$1` + suffix, [payload.id])).rows[0];
     if (item.candidateMode === 'new') {
       if (existing) { fail('candidate_id_exists_without_matching_provenance'); continue; }
-      const phoneKey = `${scopeId}:${payload.phone}`;
-      const duplicate = phones.get(phoneKey) || (await client.query(`SELECT id FROM recruitment_candidates WHERE ${SCOPED} AND phone=$5`, [...scope.tuple, payload.phone])).rows[0];
+      const phoneKey = `${scope.legal_entity_id}:${payload.phone}`;
+      const duplicate = phones.get(phoneKey) || (await client.query('SELECT id FROM recruitment_candidates WHERE legal_entity_id=$1 AND phone=$2 LIMIT 1', [scope.legal_entity_id, payload.phone])).rows[0];
       if (duplicate) { fail('phone_match_requires_explicit_identity_resolution'); continue; }
       existing = { id: payload.id, phone: payload.phone, kind: payload.kind, recruiter_id: payload.recruiterId, archived: payload.archived, ...scope };
       phones.set(phoneKey, existing);

@@ -17,6 +17,15 @@ const externalMethods = {
   },
   async externalAccess(client, actor, scope) {
     if (actor.role !== 'external_recruiter') return null;
+    if (scope.readScopes) {
+      const result = await client.query(`SELECT ${ACCESS_COLUMNS},clock_timestamp() AS now FROM recruitment_external_access WHERE ${whereRead(scope)} AND user_id=$5`, [...tuple(scope), actor.id]);
+      const active = result.rows.filter(grant => accessState(grant, grant.now) === 'active');
+      if (!active.length) forbidden('Доступ к потребностям не назначен, отозван или истёк. Обратитесь к руководителю.');
+      // Only explicitly assigned, active scopes enter a combined external read.
+      // Candidate ownership and request allowlists still apply to every query.
+      scope.readScopes = scope.readScopes.filter(item => active.some(grant => grant.responsibilityScopeId === item.responsibilityScopeId));
+      return { requestIds: [...new Set(active.flatMap(grant => grant.requestIds))] };
+    }
     const result = await client.query(`SELECT ${ACCESS_COLUMNS},clock_timestamp() AS now FROM recruitment_external_access WHERE ${where()} AND user_id=$5`, [...tuple(scope), actor.id]);
     const grant = result.rows[0];
     if (accessState(grant, grant?.now) !== 'active') forbidden('Доступ к потребностям не назначен, отозван или истёк. Обратитесь к руководителю.');

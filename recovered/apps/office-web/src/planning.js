@@ -5,6 +5,7 @@ import {
 import { FIELD_SOURCES } from './planning-fields.js';
 import { createPlanningBuilder } from './planning-builder.js';
 import { createPlanningCalendar, createPlanningOneCExport } from './planning-calendar.js';
+import { scheduleCompanyRead } from './company-work-request.js';
 
 const STATUSES = [
   ['work', 'В работе'], ['reserve', 'Резерв'], ['paid_reserve', 'Оплачиваемый резерв'],
@@ -34,9 +35,10 @@ const payload = (plan) => ({
   templateId: plan.templateId, templateVersion: plan.templateVersion || 1, rows: plan.rows, version: plan.version,
 });
 const fingerprint = (plan) => JSON.stringify(payload(plan));
-const scopeLabel = (scope) => [scope.projectName, scope.regionName, scope.scopeName].filter(Boolean).join(' · ');
 
-export function createPlanningPanel(React, { request, download }) {
+export function createPlanningPanel(React, { request: rawRequest, download }) {
+  const request = (path, options = {}, token) => (options.method || 'GET') === 'GET'
+    ? scheduleCompanyRead(rawRequest, path, options, token) : rawRequest(path, options, token);
   const { createElement: h, useState, useEffect, useMemo, useRef } = React;
   const PlanningBuilder = createPlanningBuilder(React);
   const PlanningCalendar = createPlanningCalendar(React, { request });
@@ -128,7 +130,11 @@ export function createPlanningPanel(React, { request, download }) {
     const [calendarDirty, setCalendarDirty] = useState(false);
     const [selection, setSelection] = useState(null);
     const [options, setOptions] = useState({ drivers: [], vehicles: [] });
+    const [catalogs, setCatalogs] = useState([]);
+    const [newAssignment, setNewAssignment] = useState(null);
+    const pendingAssignment = useRef(null);
     const [plan, setPlan] = useState(null);
+    const [dailyPlans, setDailyPlans] = useState([]);
     const [savedSnapshot, setSavedSnapshot] = useState('');
     const [contextLoading, setContextLoading] = useState(true);
     const [loading, setLoading] = useState(false);
@@ -213,6 +219,10 @@ export function createPlanningPanel(React, { request, download }) {
       if ([401, 403].includes(reason?.status)) {
         requestSequence.current += 1;
         setPlan(null);
+        setDailyPlans([]);
+        setCatalogs([]);
+        setNewAssignment(null);
+        pendingAssignment.current = null;
         setOptions({ drivers: [], vehicles: [] });
         setSavedSnapshot('');
         setTemplates([]);
@@ -231,7 +241,7 @@ export function createPlanningPanel(React, { request, download }) {
       }
       if (reason?.status === 401) callbacks.current.onExpired?.();
       const text = reason?.status === 401 ? 'Сессия закончилась. Войдите снова.'
-        : reason?.status === 403 ? 'Для этого проекта у вас нет доступа к планированию.'
+        : reason?.status === 403 ? 'У вас нет доступа к этому плану.'
           : reason?.status === 409 ? 'План уже изменил другой менеджер. Ваши изменения сохранены на экране. Скопируйте нужные данные или загрузите актуальный план.'
             : phase === 'save' && reason?.status === 400 ? 'Проверьте назначения и поля клиентской формы. Водитель или машина могли стать недоступны: обновите справочники и выберите доступные записи. Ваши изменения остались на экране.'
               : phase === 'save' && reason?.status === 413 ? 'Объём плана превышает допустимый размер. Сократите длинные комментарии и дополнительные сведения или количество назначений, затем сохраните план. Ваши изменения остались на экране.'
@@ -246,13 +256,18 @@ export function createPlanningPanel(React, { request, download }) {
       let active = true;
       setContextLoading(true);
       setError(null);
-      request('/planning/context', { signal: controller.signal }, token).then((result) => {
+      request('/planning/context', { signal: controller.signal }, token).then(async (result) => {
         if (!active) return;
         setOneC(result.oneC?.enabled ? result.oneC : null);
         const available = result.scopes || [];
-        setScopes(available);
+        const resources = await Promise.all(available.map(async (scope) => ({ scope, ...await request(`/planning/options?responsibilityScopeId=${encodeURIComponent(scope.responsibilityScopeId)}`, { signal: controller.signal }, token) })));
+        if (!active) return;
+        // Prefer the populated operational catalog; keep API order for ties (1C first).
+        resources.sort((a, b) => ((b.drivers?.length || 0) + (b.vehicles?.length || 0)) - ((a.drivers?.length || 0) + (a.vehicles?.length || 0)));
+        setCatalogs(resources); setScopes(resources.map(item => item.scope));
+        pendingAssignment.current = null; setNewAssignment(null);
         const requestedScope = new URLSearchParams(window.location.search).get('planningScope');
-        const first = available.find(item => item.responsibilityScopeId === requestedScope) || available[0];
+        const first = available.find(item => item.responsibilityScopeId === requestedScope) || resources[0]?.scope;
         setSelection(first ? { scopeId: first.responsibilityScopeId, date: tomorrow(first.timeZone) } : null);
       }).catch((reason) => { if (active) fail(reason, 'context'); }).finally(() => { if (active) setContextLoading(false); });
       return () => { active = false; controller.abort(); };
@@ -273,14 +288,30 @@ export function createPlanningPanel(React, { request, download }) {
       setSavedForm(null);
       setError(null);
       setMessage('');
-      const query = `responsibilityScopeId=${encodeURIComponent(selection.scopeId)}`;
-      Promise.all([
-        request(`/planning?date=${encodeURIComponent(selection.date)}&${query}`, { signal: controller.signal }, token),
-        request(`/planning/options?${query}`, { signal: controller.signal }, token),
-        request(`/planning/templates?${query}`, { signal: controller.signal }, token),
-      ]).then(([document, choices, forms]) => {
+      setDailyPlans([]);
+      // A document keeps its original access context, but the workspace finds it
+      // across every permitted context without asking the user to pick a database.
+      Promise.all(scopes.map((item) => request(`/planning?date=${encodeURIComponent(selection.date)}&responsibilityScopeId=${encodeURIComponent(item.responsibilityScopeId)}`, { signal: controller.signal }, token))).then(async (documents) => {
         if (!current()) return;
-        const chosenScope = scopes.find((item) => item.responsibilityScopeId === selection.scopeId);
+        const saved = documents.filter((document) => document.id);
+        const pending = pendingAssignment.current;
+        const document = pending?.scopeId === selection.scopeId
+          ? documents.find((item) => item.responsibilityScopeId === selection.scopeId)
+          : saved.find((item) => item.responsibilityScopeId === selection.scopeId) || saved[0]
+            || documents.find((item) => item.responsibilityScopeId === selection.scopeId) || documents[0];
+        if (!document) throw new Error('План недоступен');
+        setDailyPlans(saved);
+        if (document.responsibilityScopeId !== selection.scopeId) {
+          setSelection((previous) => ({ ...previous, scopeId: document.responsibilityScopeId }));
+          return;
+        }
+        const query = `responsibilityScopeId=${encodeURIComponent(document.responsibilityScopeId)}`;
+        const [choices, forms] = await Promise.all([
+          request(`/planning/options?${query}`, { signal: controller.signal }, token),
+          request(`/planning/templates?${query}`, { signal: controller.signal }, token),
+        ]);
+        if (!current()) return;
+        const chosenScope = scopes.find((item) => item.responsibilityScopeId === document.responsibilityScopeId);
         const catalog = forms.templates || [];
         const selectedForm = document.templateSnapshot || catalog.find(item => item.id === (document.templateId || forms.defaultTemplateId || suggestTemplate(chosenScope?.projectName, chosenScope?.regionName)));
         if (!selectedForm) throw new Error('Форма плана недоступна');
@@ -293,8 +324,12 @@ export function createPlanningPanel(React, { request, download }) {
         setOptions({ drivers: choices.drivers || [], vehicles: choices.vehicles || [] });
         setTemplates(catalog);
         setDefaultTemplateId(forms.defaultTemplateId);
-        setPlan(next);
         setSavedSnapshot(fingerprint(next));
+        if (pending?.scopeId === next.responsibilityScopeId) {
+          if (next.rows.length >= MAX_ROWS) { pendingAssignment.current = null; throw new Error('В плане уже 200 назначений'); }
+          setPlan({ ...next, rows: [...next.rows, { ...newPlanningRow(), driverId: pending.driverId }] });
+          pendingAssignment.current = null;
+        } else setPlan(next);
       }).catch((reason) => { if (current()) fail(reason, 'load'); }).finally(() => { if (current()) setLoading(false); });
       return () => { controller.abort(); if (sequence === requestSequence.current) requestSequence.current += 1; };
     }, [selection?.scopeId, selection?.date, token, reloadKey]);
@@ -302,7 +337,7 @@ export function createPlanningPanel(React, { request, download }) {
     function switchSelection(next) {
       if (!next.date || next.date === selection.date && next.scopeId === selection.scopeId) return;
       if (dirtyRef.current && !window.confirm('Есть несохранённые изменения плана или формы. Перейти к другому плану и отказаться от этих изменений?')) return;
-      setSelection(next);
+      setSelection(next.date === selection.date ? next : { ...next, scopeId: scopes[0]?.responsibilityScopeId || next.scopeId });
       setFilter('');
     }
     function reload() {
@@ -374,10 +409,19 @@ export function createPlanningPanel(React, { request, download }) {
     }
     function addRow() {
       if (!plan || busy || plan.rows.length >= MAX_ROWS) return;
-      setPlan((previous) => ({ ...previous, rows: [...previous.rows, newPlanningRow()] }));
-      setFilter('');
-      setView('assignments');
-      setMessage('');
+      if (catalogs.length > 1) { setNewAssignment({ driverId: '' }); return; }
+      appendAssignment(null);
+    }
+    function appendAssignment(driverId) {
+      const ownCatalog = catalogs.find(item => item.scope.responsibilityScopeId === plan.responsibilityScopeId);
+      const target = !driverId || ownCatalog?.drivers.some(item => item.id === driverId) ? ownCatalog : catalogs.find(item => item.drivers.some(driver => driver.id === driverId));
+      const targetScope = target?.scope.responsibilityScopeId || plan.responsibilityScopeId;
+      if (targetScope !== plan.responsibilityScopeId) {
+        if (dirtyRef.current) { setNewAssignment(null); setMessage('Сохраните текущий план, затем добавьте выбранного водителя.'); return; }
+        pendingAssignment.current = { scopeId: targetScope, driverId };
+        setSelection(previous => ({ ...previous, scopeId: targetScope }));
+      } else setPlan((previous) => ({ ...previous, rows: [...previous.rows, { ...newPlanningRow(), driverId }] }));
+      setNewAssignment(null); setFilter(''); setView('assignments'); setMessage('');
     }
     function removeRow(row, index) {
       if (oneCSending) return;
@@ -411,10 +455,10 @@ export function createPlanningPanel(React, { request, download }) {
       setCalendarOpen(true);
       setCalendarDirty(false);
     }
-    function closeCalendar(date) {
+    function closeCalendar(date, scopeId) {
       setCalendarOpen(false);
       setCalendarDirty(false);
-      if (date) setSelection(previous => ({ ...previous, date }));
+      if (date) setSelection(previous => ({ ...previous, date, scopeId: scopeId || previous.scopeId }));
       setReloadKey(key => key + 1);
     }
     async function saveForm(input) {
@@ -468,6 +512,7 @@ export function createPlanningPanel(React, { request, download }) {
         if (!mounted.current || sequence !== requestSequence.current) return;
         const next = { ...plan, ...result, rows: result.rows || submitted.rows };
         setPlan(next);
+        setDailyPlans((previous) => previous.some((item) => item.responsibilityScopeId === next.responsibilityScopeId) ? previous.map((item) => item.responsibilityScopeId === next.responsibilityScopeId ? next : item) : [...previous, next]);
         setSavedSnapshot(fingerprint(next));
         setMessage('План сохранён');
       } catch (reason) { if (mounted.current && sequence === requestSequence.current) fail(reason, 'save'); }
@@ -513,7 +558,7 @@ export function createPlanningPanel(React, { request, download }) {
       } catch (reason) {
         if (!mounted.current || sequence !== requestSequence.current) return;
         if ([401, 403].includes(reason?.status)) fail(reason, 'export');
-        else if (!accessChecked) setMessage('Не удалось проверить доступ к проекту. Выгрузка отменена. Проверьте соединение и повторите попытку.');
+        else if (!accessChecked) setMessage('Не удалось проверить доступ к плану. Выгрузка отменена. Проверьте соединение и повторите попытку.');
         else setMessage(mode === 'copy' ? 'Не удалось скопировать. Скачайте форму файлом.' : 'Не удалось подготовить файл. Попробуйте ещё раз.');
       } finally { if (mounted.current) setExporting(false); }
     }
@@ -723,7 +768,7 @@ export function createPlanningPanel(React, { request, download }) {
         h('div', { className: 'planning-preview-intro' },
           h('div', null, h('h2', null, template.label), template.custom && h('span', { className: 'planning-help' }, `Версия формы ${template.version}`), h('p', null, 'В форму включаются назначения «В работе» и «Оплачиваемый резерв». Порядок колонок соответствует выбранному клиенту.')),
           h('span', { className: `planning-draft-badge${dirty ? ' is-dirty' : ''}` }, dirty ? 'Выгрузка текущего черновика' : 'Текущая форма')),
-        template.id === 'general' && h('div', { className: 'planning-notice' }, 'Для этого проекта используется общая форма. Выберите нужный формат клиента перед подачей информации.'),
+        template.id === 'general' && h('div', { className: 'planning-notice' }, 'Для этого плана используется общая форма. Выберите нужный формат клиента перед подачей информации.'),
         invalidExportRows.length > 0 && h('div', { className: 'planning-notice', role: 'status' }, `В ${invalidExportRows.length} назначениях не заполнены водитель, машина или время. Дополните их во вкладке «Назначения», чтобы выгрузить форму.`),
         fieldIssues.length > 0 && h('div', { className: 'planning-notice', role: 'status' }, h('strong', null, 'Проверьте поля перед выгрузкой:'), h('ul', null, ...fieldIssues.slice(0, 8).map(issue => h('li', { key: `${issue.rowId}_${issue.key}` }, `Назначение ${issue.rowIndex + 1}, ${issue.label}: ${issue.message.toLowerCase()}.`))), fieldIssues.length > 8 && h('p', null, `Всего полей для проверки: ${fieldIssues.length}.`)),
         !outputRows.length ? h('div', { className: 'planning-empty surface' }, h('h3', null, 'В форме пока нет рейсов'), h('p', null, 'Добавьте назначение со статусом «В работе» или «Оплачиваемый резерв».'), button('К назначениям', () => setView('assignments')))
@@ -754,7 +799,7 @@ export function createPlanningPanel(React, { request, download }) {
     });
 
     if (calendarOpen && scope) return h('div', { className: 'planning-workspace' },
-      h(PlanningCalendar, { token, scope, oneC, options, templates, defaultTemplateId, initialDate: selection.date,
+      h(PlanningCalendar, { token, scope, scopes, oneC, options, templates, defaultTemplateId, initialDate: selection.date,
         onOpenDay: closeCalendar, onClose: () => closeCalendar(), onDirtyChange: setCalendarDirty,
         onExpired: () => fail({ status: 401 }, 'calendar'), onDenied: () => fail({ status: 403 }, 'calendar') }));
     return h('div', { className: 'planning-workspace' },
@@ -770,20 +815,23 @@ export function createPlanningPanel(React, { request, download }) {
                 : error.phase === 'save' && error.status === 413 ? null
               : error.status !== 401 && error.status !== 403 ? button('Повторить сохранение', save, { disabled: busy }) : null),
       message && h('div', { className: 'planning-feedback', role: 'status' }, message),
-      contextLoading ? h('div', { className: 'planning-loading surface', role: 'status' }, 'Загружаем проекты…')
+      contextLoading ? h('div', { className: 'planning-loading surface', role: 'status' }, 'Загружаем планирование…')
         : !scopes.length && !error ? h('div', { className: 'planning-empty surface' },
-          h('h2', null, 'Нет доступных проектов'),
+          h('h2', null, 'Планирование пока недоступно'),
           h('p', null, 'Для планирования нужна назначенная зона ответственности и разрешение на доступ к персональным данным в этой зоне.'),
           h('p', null, 'Обратитесь к администратору доступа: «Сотрудники» → ваша карточка → «Настроить планирование». Администратор выбирает зоны и включает доступ к персональным данным.'),
-          h('p', null, 'Зона ответственности — часть проекта в определённом регионе. Сотрудники одной зоны работают с общими планами. После настройки обновите страницу.')) : null,
+          h('p', null, 'После настройки доступа обновите страницу.')) : null,
       selection && h('section', { className: 'planning-controls surface', 'aria-label': 'Настройки плана' },
         field('Дата рейсов', h('input', { type: 'date', value: selection.date, disabled: busy || Boolean(builderInitial), onChange: (event) => switchSelection({ ...selection, date: event.target.value }) }), scope?.timeZone ? `Часовой пояс: ${scope.timeZone}` : null),
-        field('Проект', h('select', { value: selection.scopeId, disabled: busy || Boolean(builderInitial), onChange: (event) => switchSelection({ ...selection, scopeId: event.target.value }) }, ...scopes.map((item) => h('option', { key: item.responsibilityScopeId, value: item.responsibilityScopeId }, scopeLabel(item))))),
         field('Форма подачи клиенту', h('select', { value: plan ? `${plan.templateId}@${plan.templateVersion || 1}` : '', disabled: busy || !plan || Boolean(builderInitial), onChange: (event) => changeTemplate(event.target.value) }, !plan && h('option', { value: '' }, loading ? 'Загрузка…' : 'Форма недоступна'), ...formChoices.map((item) => h('option', { key: `${item.id}@${item.version || 1}`, value: `${item.id}@${item.version || 1}` }, `${item.label}${item.custom ? ` · версия ${item.version}` : ''}${templates.some(latest => latest.id === item.id && latest.version !== item.version) ? ' (версия плана)' : ''}`))))),
+      !loading && dailyPlans.length > 1 && h('section', { className: 'planning-documents', 'aria-label': 'Планы на выбранную дату' },
+        ...dailyPlans.map((document, index) => h('article', { key: document.id, className: 'planning-document surface' },
+          h('div', null, h('h2', null, document.templateSnapshot?.label || templateFor(document.templateId)?.label || `План ${index + 1}`), h('p', null, `Назначений: ${document.rows?.length || 0}`)),
+          button(document.responsibilityScopeId === selection.scopeId ? 'Открытый план' : 'Открыть план', () => switchSelection({ ...selection, scopeId: document.responsibilityScopeId }), { disabled: busy || Boolean(builderInitial) || document.responsibilityScopeId === selection.scopeId, 'aria-label': `Открыть план ${index + 1}: ${document.templateSnapshot?.label || 'Клиентская форма'}` })))),
       loading && h('div', { className: 'planning-loading surface', role: 'status' }, 'Загружаем план и справочники…'),
       plan && !loading && builderInitial && h(React.Fragment, null,
         button('Обновить список форм', refreshForms, { disabled: busy }),
-        h(PlanningBuilder, { templates: templates.map(item => ({ ...item, isDefault: item.id === defaultTemplateId })), selectedTemplate: builderInitial, scopeLabel: scopeLabel(scope), onSave: saveForm,
+        h(PlanningBuilder, { templates: templates.map(item => ({ ...item, isDefault: item.id === defaultTemplateId })), selectedTemplate: builderInitial, onSave: saveForm,
           onClose: () => { setBuilderInitial(null); setBuilderDirty(false); setBuilderError(null); }, onDirtyChange: setBuilderDirty, busy, error: builderError })),
       plan && !loading && !builderInitial && h(React.Fragment, null,
         h('div', { className: 'planning-workbar' }, h('div', { className: 'planning-mode-actions' }, button('Календарь', openCalendar, { disabled: busy }), button('Конструктор форм', openBuilder, { disabled: busy })),
@@ -816,7 +864,13 @@ export function createPlanningPanel(React, { request, download }) {
             : !filteredRows.length ? h('div', { className: 'planning-empty surface' }, h('h3', null, 'Назначения не найдены'), h('p', null, 'Измените запрос или очистите поиск.'), button('Очистить поиск', () => setFilter('')))
               : currentPreferences.layout === 'table' ? renderTable() : filteredRows.map(({ row, index }) => renderRow(row, index)),
           plan.rows.length >= MAX_ROWS && h('p', { className: 'planning-help' }, 'В одном плане может быть не более 200 назначений.')) : renderPreview(),
-        h('footer', { className: 'planning-footer' }, h('span', null, 'План сохраняется для выбранной даты и зоны ответственности.'), plan.updatedAt && h('span', null, `Обновлён ${new Date(plan.updatedAt).toLocaleString('ru-RU', { timeZone: scope?.timeZone || 'Europe/Moscow', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`))),
+        h('footer', { className: 'planning-footer' }, h('span', null, 'План сохраняется на выбранную дату.'), plan.updatedAt && h('span', null, `Обновлён ${new Date(plan.updatedAt).toLocaleString('ru-RU', { timeZone: scope?.timeZone || 'Europe/Moscow', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`))),
+      newAssignment && plan && h(RowDialog, { title: 'Новое назначение', onClose: () => setNewAssignment(null) },
+        h('p', { className: 'planning-help' }, 'Выберите водителя. Его план и справочники откроются автоматически.'),
+        field('Водитель для назначения', h('select', { value: newAssignment.driverId, onChange: event => setNewAssignment({ driverId: event.target.value }) },
+          h('option', { value: '' }, 'Назначение без водителя'),
+          ...[...new Map(catalogs.flatMap(item => item.drivers || []).map(driver => [driver.id, driver])).values()].sort((a, b) => a.name.localeCompare(b.name, 'ru')).map(driver => h('option', { key: driver.id, value: driver.id }, driver.name)))),
+        h('footer', { className: 'planning-dialog-footer' }, button('Отмена', () => setNewAssignment(null)), button('Добавить назначение', () => appendAssignment(newAssignment.driverId || null), { className: 'button primary' }))),
       rowDialog && plan && !loading && renderRowDialog());
   }
   return PlanningPanel;

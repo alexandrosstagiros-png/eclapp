@@ -83,4 +83,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await f.close();
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

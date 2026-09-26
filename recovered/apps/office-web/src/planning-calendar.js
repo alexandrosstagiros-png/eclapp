@@ -106,11 +106,12 @@ export function createPlanningCalendar(React, { request }) {
   const button = (text, action, props = {}) => h('button', { type: 'button', className: 'button', onClick: action, ...props }, text);
   const field = (label, input) => h('label', { className: 'planning-field' }, h('span', null, label), React.cloneElement(input, { 'aria-label': input.props['aria-label'] || label }));
 
-  return function PlanningCalendar({ token, scope, oneC, options = { drivers: [], vehicles: [] }, templates = [], defaultTemplateId, initialDate, onOpenDay, onClose, onExpired, onDenied, onDirtyChange }) {
+  return function PlanningCalendar({ token, scope, scopes = [scope], oneC, options = { drivers: [], vehicles: [] }, templates = [], defaultTemplateId, initialDate, onOpenDay, onClose, onExpired, onDenied, onDirtyChange }) {
     const [anchor, setAnchor] = useState(initialDate);
     const [mode, setMode] = useState('week');
     const [axis, setAxis] = useState('driver');
     const [plans, setPlans] = useState({});
+    const [otherPlans, setOtherPlans] = useState([]);
     const [baseline, setBaseline] = useState({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -159,7 +160,7 @@ export function createPlanningCalendar(React, { request }) {
 
     function clearPrivateData() {
       sequence.current += 1;
-      setPlans({}); setBaseline({}); setHistory([]); setClipboard(null); setPreview(null); setDayCopy(null); setActive(null); setEdit(null); setHover(null); setSelection(null); setNotice(''); setDenied(true); setLoading(false); setSaving(false);
+      setPlans({}); setOtherPlans([]); setBaseline({}); setHistory([]); setClipboard(null); setPreview(null); setDayCopy(null); setActive(null); setEdit(null); setHover(null); setSelection(null); setNotice(''); setDenied(true); setLoading(false); setSaving(false);
       callbacks.current.onDirtyChange?.(false);
     }
     function fail(reason, phase = 'load') {
@@ -168,7 +169,7 @@ export function createPlanningCalendar(React, { request }) {
         clearPrivateData();
         if (reason.status === 401) callbacks.current.onExpired?.(); else callbacks.current.onDenied?.();
       }
-      setError(reason?.status === 401 ? 'Сессия закончилась. Войдите снова.' : reason?.status === 403 ? 'Доступ к планированию этого проекта изменился.' : reason?.status === 409 ? 'Другой менеджер уже изменил один из дней. Ни один день не перезаписан. Ваши изменения остались на экране; загрузите актуальный календарь после проверки.' : phase === 'save' && reason?.status === 400 ? 'Проверьте назначения: выбранные водители, машины или форма могли стать недоступны. Ваши изменения остались на экране.' : phase === 'save' && reason?.status === 413 ? 'Объём изменений слишком большой. Отмените часть копирования или сократите дополнительные сведения и повторите сохранение. Ваши изменения остались на экране.' : phase === 'save' ? 'Не удалось сохранить календарь. Проверьте соединение и доступность выбранных водителей и машин. Ваши изменения остались на экране.' : 'Не удалось загрузить календарь. Проверьте соединение и повторите попытку.');
+      setError(reason?.status === 401 ? 'Сессия закончилась. Войдите снова.' : reason?.status === 403 ? 'Доступ к планированию изменился.' : reason?.status === 409 ? 'Другой менеджер уже изменил один из дней. Ни один день не перезаписан. Ваши изменения остались на экране; загрузите актуальный календарь после проверки.' : phase === 'save' && reason?.status === 400 ? 'Проверьте назначения: выбранные водители, машины или форма могли стать недоступны. Ваши изменения остались на экране.' : phase === 'save' && reason?.status === 413 ? 'Объём изменений слишком большой. Отмените часть копирования или сократите дополнительные сведения и повторите сохранение. Ваши изменения остались на экране.' : phase === 'save' ? 'Не удалось сохранить календарь. Проверьте соединение и доступность выбранных водителей и машин. Ваши изменения остались на экране.' : 'Не удалось загрузить календарь. Проверьте соединение и повторите попытку.');
     }
     useEffect(() => { callbacks.current.onDirtyChange?.(dirty); }, [dirty]);
     useEffect(() => {
@@ -179,10 +180,15 @@ export function createPlanningCalendar(React, { request }) {
     useEffect(() => {
       const currentSequence = ++sequence.current;
       const controller = new AbortController();
-      setLoading(true); setDenied(false); setError(''); setNotice(''); setPlans({}); setBaseline({}); setHistory([]); setSelection(null); setActive(null); setEdit(null); setClipboard(null); setPreview(null); setDayCopy(null); setHover(null);
-      const query = new URLSearchParams({ from: dates[0], to: dates.at(-1), responsibilityScopeId: scope.responsibilityScopeId });
-      request(`/planning/calendar?${query}`, { signal: controller.signal }, token).then(result => {
+      setLoading(true); setDenied(false); setError(''); setNotice(''); setPlans({}); setOtherPlans([]); setBaseline({}); setHistory([]); setSelection(null); setActive(null); setEdit(null); setClipboard(null); setPreview(null); setDayCopy(null); setHover(null);
+      Promise.all(scopes.map(async (item) => {
+        const query = new URLSearchParams({ from: dates[0], to: dates.at(-1), responsibilityScopeId: item.responsibilityScopeId });
+        return request(`/planning/calendar?${query}`, { signal: controller.signal }, token);
+      })).then(results => {
         if (sequence.current !== currentSequence) return;
+        const allPlans = results.flatMap(result => result.plans || []);
+        const result = { plans: allPlans.filter(plan => plan.responsibilityScopeId === scope.responsibilityScopeId) };
+        setOtherPlans(allPlans.filter(plan => plan.responsibilityScopeId !== scope.responsibilityScopeId).sort((a, b) => a.businessDate.localeCompare(b.businessDate)));
         const chosen = templates.find(item => item.id === defaultTemplateId) || templates.find(item => item.id === 'general') || templates[0];
         if (!chosen) throw new Error('Форма плана недоступна');
         const fetched = Object.fromEntries((result.plans || []).map(plan => [plan.businessDate, plan]));
@@ -243,9 +249,9 @@ export function createPlanningCalendar(React, { request }) {
       if (dirty && !window.confirm('Вернуться к дневному плану? Несохранённые изменения календаря будут потеряны.')) return;
       callbacks.current.onClose?.();
     }
-    function openDay(date) {
+    function openDay(date, scopeId = scope.responsibilityScopeId) {
       if (dirty && !window.confirm('Открыть редактор дня? Несохранённые изменения календаря будут потеряны. Сначала сохраните календарь, чтобы продолжить с ними.')) return;
-      callbacks.current.onOpenDay?.(date);
+      callbacks.current.onOpenDay?.(date, scopeId);
     }
     function copySelection() {
       if (!selection || busy || editDirty) return;
@@ -386,12 +392,16 @@ export function createPlanningCalendar(React, { request }) {
     const hoverRows = hover && lanes[hover.r] ? cellRows(plans, dates[hover.c], lanes[hover.r].id, axis) : [];
 
     return h('section', { className: 'planning-calendar', 'aria-label': 'Календарь планирования' },
-      h('div', { className: 'planning-cal-heading' }, h('div', null, onClose && button('← К дневному плану', closeCalendar, { className: 'planning-link planning-cal-back', disabled: busy }), h('span', { className: 'planning-eyebrow' }, 'ПЛАНИРОВАНИЕ РЕЙСОВ'), h('h2', null, 'Календарь'), h('div', { className: 'planning-cal-context' }, [scope.projectName, scope.regionName, scope.scopeName || scope.responsibilityScopeName].filter(Boolean).join(' · ')), h('p', null, 'Выделяйте ячейки и протягивайте за угол, чтобы повторить рейсы по дням и строкам.')),
+      h('div', { className: 'planning-cal-heading' }, h('div', null, onClose && button('← К дневному плану', closeCalendar, { className: 'planning-link planning-cal-back', disabled: busy }), h('span', { className: 'planning-eyebrow' }, 'ПЛАНИРОВАНИЕ РЕЙСОВ'), h('h2', null, 'Календарь'), h('p', null, 'Выделяйте ячейки и протягивайте за угол, чтобы повторить рейсы по дням и строкам.')),
         h('div', { className: 'planning-save-block' }, button(saving ? 'Сохраняем…' : 'Сохранить календарь', save, { className: 'button primary', disabled: busy || !planDirty || editDirty }), h('span', { className: `planning-save-state${dirty ? ' is-dirty' : ''}`, 'aria-live': 'polite' }, editDirty ? 'Сначала примените изменения рейса ниже' : planDirty ? `Изменено дней: ${changedDates.length}` : 'Все изменения сохранены'))),
       h('div', { className: 'planning-cal-toolbar' },
         h('div', { className: 'planning-cal-period' }, button('←', () => navigatePeriod(-1), { disabled: busy, 'aria-label': 'Предыдущий период' }), field('Период', h('input', { type: 'date', value: anchor, disabled: busy, onChange: event => changePeriod(event.target.value) })), button('→', () => navigatePeriod(1), { disabled: busy, 'aria-label': 'Следующий период' })),
         h('div', { className: 'planning-tabs', 'aria-label': 'Масштаб календаря' }, ...[['week', 'Неделя'], ['month', 'Месяц']].map(([value, label]) => button(label, () => changePeriod(anchor, value), { key: value, disabled: busy, 'aria-pressed': mode === value }))),
         field('Строки', h('select', { value: axis, disabled: busy, onChange: event => changeAxis(event.target.value) }, h('option', { value: 'driver' }, 'Водители'), h('option', { value: 'vehicle' }, 'Машины')))),
+      !loading && otherPlans.length > 0 && h('section', { className: 'planning-documents', 'aria-label': 'Другие планы за период' },
+        ...otherPlans.map(document => h('article', { key: document.id, className: 'planning-document surface' },
+          h('div', null, h('h3', null, `${dateLabel(document.businessDate)} · ${document.templateSnapshot?.label || 'План рейсов'}`), h('p', null, `Назначений: ${document.rows?.length || 0}`)),
+          button('Открыть план', () => openDay(document.businessDate, document.responsibilityScopeId), { disabled: busy })))),
       error && h('div', { className: 'planning-error', role: 'alert' }, h('p', null, error), !denied && button('Загрузить актуальный календарь', reload, { disabled: loading || saving })),
       notice && h('div', { className: 'planning-feedback', role: 'status' }, notice),
       h('div', { className: 'planning-cal-actions' }, button('Копировать', copySelection, { disabled: busy || editDirty || !selection, 'aria-label': 'Копировать выделенные ячейки' }), button('Вставить', pasteSelection, { disabled: busy || editDirty || !clipboard || !selection }), button('Копировать день', () => startDayCopy(activeDate || dates[0]), { disabled: busy || editDirty }), button('Отменить действие', () => { const next = history.at(-1); if (next) { setPlans(next); setHistory(history.slice(0, -1)); setPreview(null); setEdit(null); setNotice('Последнее действие отменено.'); } }, { disabled: busy || editDirty || !history.length }), button('Обновить', reload, { disabled: busy }), h('span', { className: 'planning-cal-total' }, `${dates.length} дн. · ${count} назначений`)),

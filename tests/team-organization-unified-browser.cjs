@@ -1,0 +1,63 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+(async () => {
+  const fixture = await createTestServer({ staffTeamActors: true });
+  let browser;
+  try {
+    const { ids, adminPool: db } = fixture;
+    const secondScope = randomUUID();
+    await db.query('INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)', [secondScope, ids.project, 'Вторая оргструктура']);
+    await db.query('UPDATE access_grants SET personal_data_visible=true');
+    await db.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible) VALUES($1,$2,$3,$4,$5,true)', [ids.admin, ids.legal, ids.region, ids.project, secondScope]);
+    await db.query('UPDATE access_grants SET responsibility_scope_id=$2 WHERE user_id=ANY($1::uuid[])', [[ids.drivers[0], ids.drivers[1]], secondScope]);
+    const session = await fixture.devLogin(ids.admin);
+    const api = async (method, path, body) => {
+      const response = await fixture.request(method, path, body, session.accessToken);
+      assert.ok([200, 201].includes(response.status), JSON.stringify(response.body));
+      return response.body;
+    };
+    const firstPosition = await api('PUT', `/team/organization/positions/${randomUUID()}`, { responsibilityScopeId: ids.scope, operationId: randomUUID(), version: 0, title: 'Должность первого отдела' });
+    const secondPosition = await api('PUT', `/team/organization/positions/${randomUUID()}`, { responsibilityScopeId: secondScope, operationId: randomUUID(), version: 0, title: 'Должность второго отдела' });
+    browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await context.addInitScript(value => sessionStorage.setItem('ecl.session.v2', JSON.stringify({ session: value })), { ...session, rememberedDevice: false });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('dialog', dialog => dialog.accept());
+    await page.goto(`${fixture.origin}/?section=team`);
+    await page.getByRole('navigation', { name: 'Разделы команды' }).getByRole('button', { name: 'Задачи', exact: true }).click();
+    await page.getByRole('button', { name: 'Оргструктура', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Оргструктура', exact: true });
+    await dialog.getByRole('button', { name: 'Настроить Водитель 02', exact: true }).click();
+    const positions = dialog.getByLabel('Должность сотрудника', { exact: true });
+    const managers = dialog.getByLabel('Руководитель сотрудника', { exact: true });
+    assert.deepEqual(await positions.locator('option').evaluateAll(nodes => nodes.map(node => node.value)), ['', secondPosition.id]);
+    assert.equal(await positions.locator(`option[value="${firstPosition.id}"]`).count(), 0);
+    assert.equal(await managers.locator(`option[value="${ids.dispatcher}"]`).count(), 0);
+    assert.equal(await managers.locator(`option[value="${ids.drivers[0]}"]`).count(), 1);
+    await positions.selectOption(secondPosition.id);
+    await managers.selectOption(ids.drivers[0]);
+    const saved = page.waitForResponse(response => response.url().endsWith(`/team/organization/employees/${ids.drivers[1]}`) && response.request().method() === 'PUT');
+    await dialog.getByRole('button', { name: 'Сохранить сотрудника', exact: true }).click();
+    const response = await saved;
+    assert.equal(response.status(), 200, await response.text());
+    assert.equal(response.request().postDataJSON().responsibilityScopeId, secondScope);
+    await dialog.getByText('Руководитель и должность сохранены.', { exact: true }).waitFor();
+    const original = await api('GET', `/team/organization?responsibilityScopeId=${secondScope}`);
+    const employee = original.people.find(person => person.id === ids.drivers[1]);
+    assert.equal(employee.positionId, secondPosition.id);
+    assert.equal(employee.managerId, ids.drivers[0]);
+    assert.equal((await db.query('SELECT 1 FROM team_organization_employees WHERE user_id=$1 AND responsibility_scope_id=$2', [ids.drivers[1], ids.scope])).rowCount, 0);
+    await dialog.getByRole('button', { name: 'Настроить Диспетчер', exact: true }).click();
+    assert.deepEqual(await positions.locator('option').evaluateAll(nodes => nodes.map(node => node.value)), ['', firstPosition.id]);
+    assert.equal(await managers.locator(`option[value="${ids.drivers[0]}"]`).count(), 0);
+    assert.deepEqual(errors, []);
+    console.log('PASS unified employee editor limits positions and managers to the original membership and preserves its source on save');
+  } finally { if (browser) await browser.close(); await fixture.close(); }
+})().catch(error => { console.error(error.stack); process.exit(1); });

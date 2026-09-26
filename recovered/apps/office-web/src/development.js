@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MIT
+import { createCompanyWorkRequest } from './company-work-request.js';
 // One ticket moves from analysis to production; there are no separate task copies.
 const PIPELINES = [
   { id: 'analysis', label: 'Аналитика', stages: [['new', 'Новые'], ['clarifying', 'Уточнение'], ['ready', 'Готово к разработке']] },
@@ -11,7 +12,6 @@ const STAGES = PIPELINES.flatMap((pipeline) => pipeline.stages);
 const EMPTY_LABELS = { new: 'Новых обращений пока нет', clarifying: 'Нет тикетов на уточнении', ready: 'Нет задач, готовых к разработке', in_progress: 'Нет тикетов в работе', review: 'Нет тикетов на проверке', done: 'Здесь появятся завершённые тикеты' };
 const nameOf = (options, value) => options.find(([id]) => id === value)?.[1] || value || 'Не указано';
 const normalized = (value) => String(value || '').toLocaleLowerCase('ru').trim();
-const scopeLabel = (scope) => [scope.projectName, scope.regionName, scope.scopeName].filter(Boolean).join(' · ') || 'Проект';
 const dateLabel = (value) => {
   const date = new Date(value);
   return !value || Number.isNaN(date.getTime()) ? 'Дата не указана' : new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(date);
@@ -23,6 +23,13 @@ const eventLabel = (event) => {
   if (event.type === 'comment') return event.text;
   if (event.fromStatus && event.toStatus) return `${nameOf(STAGES, event.fromStatus)} → ${nameOf(STAGES, event.toStatus)}`;
   return event.text || (event.type === 'created' ? 'Тикет создан' : 'Тикет обновлён');
+};
+
+// Keep new work with the populated operational data, not an empty technical grant.
+const preferredCreationScope = (scopes, records) => {
+  const counts = new Map(scopes.map(scope => [scope.responsibilityScopeId, 0]));
+  for (const record of records) if (counts.has(record.responsibilityScopeId)) counts.set(record.responsibilityScopeId, counts.get(record.responsibilityScopeId) + 1);
+  return scopes.reduce((best, scope) => !best || counts.get(scope.responsibilityScopeId) > counts.get(best.responsibilityScopeId) ? scope : best, null)?.responsibilityScopeId || '';
 };
 
 export function createDevelopmentWorkspace(React, { request }) {
@@ -60,16 +67,18 @@ export function createDevelopmentWorkspace(React, { request }) {
     const [pipeline, setPipeline] = useState('analysis'), [query, setQuery] = useState('');
     const [dialog, setDialog] = useState(null), [formError, setFormError] = useState(''), [conflict, setConflict] = useState(null), [busy, setBusy] = useState('');
     const [comment, setComment] = useState(() => ({ id: crypto.randomUUID(), text: '' })), [commentError, setCommentError] = useState('');
-    const alive = useRef(true), busyRef = useRef(false), scopeRef = useRef(scopeId), sessionRef = useRef(''), lastCredentials = useRef({ actorId: actor?.id, token }), listGeneration = useRef(0), detailGeneration = useRef(0), detailController = useRef(null), callbacks = useRef({ onExpired, onDirtyChange });
+    const alive = useRef(true), busyRef = useRef(false), scopeRef = useRef(scopeId), scopesRef = useRef(scopes), sessionRef = useRef(''), lastCredentials = useRef({ actorId: actor?.id, token }), listGeneration = useRef(0), detailGeneration = useRef(0), detailController = useRef(null), callbacks = useRef({ onExpired, onDirtyChange });
+    const companyRequest = useRef(null);
+    if (!companyRequest.current) companyRequest.current = createCompanyWorkRequest(request, () => scopesRef.current);
     // Access tokens renew during ordinary requests. Only an account change invalidates drafts and writes.
-    scopeRef.current = scopeId; sessionRef.current = actor?.id || ''; callbacks.current = { onExpired, onDirtyChange };
+    scopeRef.current = scopeId; scopesRef.current = scopes; sessionRef.current = actor?.id || ''; callbacks.current = { onExpired, onDirtyChange };
     const formDirty = Boolean(dialog?.value && FIELDS.some((key) => dialog.value[key] !== dialog.original[key]));
     const dirty = formDirty || Boolean(comment.text.trim());
     const currentPipeline = PIPELINES.find((item) => item.id === pipeline);
-    const failMessage = (reason) => reason?.status === 401 ? 'Сессия завершена. Войдите снова.' : reason?.status === 403 ? 'Доступ к этому тикету или области закрыт. Обратитесь к администратору.' : reason?.status === 404 ? 'Тикет больше недоступен. Обновите список обращений.' : reason?.message || 'Не удалось выполнить действие. Проверьте соединение и попробуйте снова.';
+    const failMessage = (reason) => reason?.status === 401 ? 'Сессия завершена. Войдите снова.' : reason?.status === 403 ? 'Доступ к этому тикету закрыт. Обратитесь к администратору.' : reason?.status === 404 ? 'Тикет больше недоступен. Обновите список обращений.' : reason?.message || 'Не удалось выполнить действие. Проверьте соединение и попробуйте снова.';
     const expire = (reason) => { if (reason?.status === 401) callbacks.current.onExpired?.(); };
     const clearDraft = () => { detailGeneration.current += 1; detailController.current?.abort(); setDialog(null); setFormError(''); setConflict(null); setComment({ id: crypto.randomUUID(), text: '' }); setCommentError(''); };
-    const isCurrent = (targetScope, session, generation) => alive.current && scopeRef.current === targetScope && sessionRef.current === session && (generation === undefined || detailGeneration.current === generation);
+    const isCurrent = (targetScope, session, generation) => alive.current && scopesRef.current.some((scope) => scope.responsibilityScopeId === targetScope) && sessionRef.current === session && (generation === undefined || detailGeneration.current === generation);
     const upsertTicket = (ticket) => {
       // Do not let an earlier board read replace a newer detail or mutation result.
       listGeneration.current += 1;
@@ -94,7 +103,7 @@ export function createDevelopmentWorkspace(React, { request }) {
       setContextLoading(true); setContextError(''); setCanManage(false); setScopes([]); setScopeId(''); setTickets([]); setLoaded(false); setError(''); setNotice(''); setQuery(''); setPipeline('analysis'); clearDraft();
       request('/development/context', { signal: controller.signal }, token).then((result) => {
         if (controller.signal.aborted) return;
-        if (!Array.isArray(result?.scopes)) throw new Error('Сервер не вернул доступные области. Повторите загрузку.');
+        if (!Array.isArray(result?.scopes)) throw new Error('Не удалось загрузить доступ к разработке. Повторите загрузку.');
         setScopes(result.scopes); setCanManage(result.canManage === true); setScopeId(result.scopes[0]?.responsibilityScopeId || '');
       }).catch((reason) => { if (!controller.signal.aborted) { setContextError(failMessage(reason)); expire(reason); } }).finally(() => { if (!controller.signal.aborted) setContextLoading(false); });
       return () => controller.abort();
@@ -110,14 +119,14 @@ export function createDevelopmentWorkspace(React, { request }) {
         if (!Array.isArray(result?.scopes)) throw new Error('Не удалось обновить доступ к разделу. Ваш черновик сохранён.');
         setCanManage(result.canManage === true);
         if (result.scopes.some((scope) => scope.responsibilityScopeId === scopeRef.current)) setScopes(result.scopes);
-        else if (scopeRef.current) setError('Доступ к текущей области изменился. Ваш черновик сохранён в окне. Обратитесь к администратору.');
+        else if (scopeRef.current) setError('Доступ к разделу изменился. Ваш черновик сохранён в окне. Обратитесь к администратору.');
       }).catch((reason) => { if (!controller.signal.aborted && alive.current && sessionRef.current === session) { setError(failMessage(reason)); expire(reason); } });
       return () => controller.abort();
     }, [token, actor?.id]);
 
     async function loadTickets(targetScope, signal) {
       const generation = ++listGeneration.current, session = sessionRef.current;
-      const result = await request(`/development?responsibilityScopeId=${encodeURIComponent(targetScope)}`, { signal }, token);
+      const result = await companyRequest.current('/development', { signal }, token);
       if (!Array.isArray(result?.tickets)) throw new Error('Сервер не вернул список тикетов. Повторите загрузку.');
       if (!signal?.aborted && generation === listGeneration.current && isCurrent(targetScope, session)) { setTickets(result.tickets); setLoaded(true); }
       return result;
@@ -135,11 +144,6 @@ export function createDevelopmentWorkspace(React, { request }) {
       setLoading(true); setError('');
       try { await loadTickets(targetScope); } catch (reason) { if (isCurrent(targetScope, session) && generation === listGeneration.current) { setError(failMessage(reason)); expire(reason); } } finally { if (isCurrent(targetScope, session) && generation === listGeneration.current) setLoading(false); }
     }
-    const chooseScope = (next) => {
-      if (busyRef.current || scopeId === next) return;
-      if (dirty && !window.confirm('Сменить область и удалить несохранённые изменения тикета и комментария?')) return;
-      clearDraft(); setScopeId(next); setQuery(''); setNotice('');
-    };
     const closeDialog = () => {
       if (busyRef.current) return;
       if (dirty && !window.confirm('Закрыть тикет и удалить несохранённые изменения и комментарий?')) return;
@@ -148,13 +152,13 @@ export function createDevelopmentWorkspace(React, { request }) {
     const createTicket = () => {
       if (busyRef.current || !loaded || !scopeId) return;
       clearDraft();
-      const value = newTicket(scopeId);
+      const value = newTicket(preferredCreationScope(scopes, tickets) || scopeId);
       setDialog({ mode: 'new', id: value.id, value, original: { ...value }, events: [], loading: false, error: '' }); setNotice('');
     };
     async function openTicket(id) {
       if (busyRef.current) return;
       clearDraft();
-      const generation = detailGeneration.current, targetScope = scopeId, session = sessionRef.current, controller = new AbortController();
+      const generation = detailGeneration.current, targetScope = tickets.find((ticket) => ticket.id === id)?.responsibilityScopeId, session = sessionRef.current, controller = new AbortController();
       detailController.current = controller;
       setDialog({ mode: 'edit', id, loading: true, error: '', events: [] });
       try {
@@ -170,7 +174,7 @@ export function createDevelopmentWorkspace(React, { request }) {
     const changeField = (key, value) => setDialog((current) => ({ ...current, value: { ...current.value, [key]: value } }));
     async function loadConflict() {
       if (!dialog?.value || busyRef.current) return;
-      const current = dialog, targetScope = scopeId, session = sessionRef.current, generation = detailGeneration.current;
+      const current = dialog, targetScope = dialog.value.responsibilityScopeId, session = sessionRef.current, generation = detailGeneration.current;
       busyRef.current = true; setBusy('conflict'); setFormError('');
       try {
         const result = await readDetail(current.id, targetScope);
@@ -184,7 +188,7 @@ export function createDevelopmentWorkspace(React, { request }) {
       event?.preventDefault();
       if (!dialog?.value || busyRef.current) return;
       if (conflict && !latest) { setFormError('Сравните актуальную версию с вашим черновиком и подтвердите сохранение ниже.'); return; }
-      const current = dialog, targetScope = scopeId, session = sessionRef.current, generation = detailGeneration.current;
+      const current = dialog, targetScope = dialog.value.responsibilityScopeId, session = sessionRef.current, generation = detailGeneration.current;
       const changed = Object.fromEntries(FIELDS.filter((key) => current.value[key] !== current.original[key]).map((key) => [key, current.value[key]]));
       const submitted = serialise(latest ? { ...latest, ...changed } : current.value);
       if (moveTo) submitted.status = moveTo;
@@ -224,7 +228,7 @@ export function createDevelopmentWorkspace(React, { request }) {
     async function sendComment(event) {
       event.preventDefault();
       if (!dialog?.ticket || busyRef.current || !comment.text.trim()) return;
-      const current = dialog, draft = comment, targetScope = scopeId, session = sessionRef.current, generation = detailGeneration.current;
+      const current = dialog, draft = comment, targetScope = dialog.ticket.responsibilityScopeId, session = sessionRef.current, generation = detailGeneration.current;
       busyRef.current = true; setBusy('comment'); setCommentError('');
       try {
         const saved = await request('/development/comments', { method: 'POST', body: JSON.stringify({ id: draft.id, ticketId: current.id, responsibilityScopeId: targetScope, text: draft.text.trim() }) }, token);
@@ -277,9 +281,9 @@ export function createDevelopmentWorkspace(React, { request }) {
       h('header', { className: 'development-heading' }, h('div', null, h('h1', null, 'Разработка'), h('p', null, 'Ошибки и предложения по работе приложения.')), button('+ Новый тикет', createTicket, { className: 'button development-primary', disabled: !scopeId || !loaded || Boolean(busy) || contextLoading })),
       contextLoading && h('div', { className: 'development-loading', role: 'status' }, 'Загружаем доступ к разделу…'),
       contextError && h('div', { className: 'development-error', role: 'alert' }, h('p', null, contextError), button('Повторить загрузку', () => setContextRevision((value) => value + 1))),
-      !contextLoading && !contextError && !scopes.length && h('div', { className: 'development-empty' }, h('h2', null, 'Нет доступной области'), h('p', null, 'Попросите администратора назначить вам область ответственности, чтобы создавать тикеты.')),
+      !contextLoading && !contextError && !scopes.length && h('div', { className: 'development-empty' }, h('h2', null, 'Раздел пока недоступен'), h('p', null, 'Попросите администратора назначить вам область ответственности, чтобы создавать тикеты.')),
       !contextLoading && scopeId && h(React.Fragment, null,
-        h('section', { className: 'development-scope-row', 'aria-label': 'Область тикетов' }, field('Проект', h('select', { value: scopeId, disabled: Boolean(busy) || scopes.length < 2, onChange: (event) => chooseScope(event.target.value) }, ...scopes.map((scope) => h('option', { key: scope.responsibilityScopeId, value: scope.responsibilityScopeId }, scopeLabel(scope))))), h('p', null, canManage ? 'Все тикеты команды. Уточняйте обращения и переводите готовые задачи в продакшен.' : 'Ваши тикеты. Создавайте обращения, дополняйте описание и следите за решением.')),
+        h('p', { className: 'development-muted' }, canManage ? 'Все тикеты команды. Уточняйте обращения и переводите готовые задачи в продакшен.' : 'Ваши тикеты. Создавайте обращения, дополняйте описание и следите за решением.'),
         h('div', { className: 'development-workbar' }, h('div', { className: 'development-segment', role: 'group', 'aria-label': 'Воронка тикетов' }, ...PIPELINES.map((item) => button(h(React.Fragment, null, item.label, h('span', { className: 'development-pipeline-count' }, tickets.filter((ticket) => item.stages.some(([status]) => status === ticket.status)).length)), () => setPipeline(item.id), { key: item.id, 'aria-pressed': pipeline === item.id }))), h('div', { className: 'development-search-row' }, field('Поиск тикета', h('input', { type: 'search', value: query, onChange: (event) => setQuery(event.target.value), placeholder: 'Номер, название или описание' })), button(loading ? 'Обновляем…' : 'Обновить', refresh, { disabled: loading || Boolean(busy), 'aria-label': 'Обновить список тикетов' }))),
         error && h('div', { className: 'development-error', role: 'alert' }, h('p', null, error), button('Повторить загрузку', refresh, { disabled: loading || Boolean(busy) })),
         notice && h('div', { className: 'development-notice', role: 'status' }, notice),

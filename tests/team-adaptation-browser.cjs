@@ -111,4 +111,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await employeePage.screenshot({path:path.join(output,'adaptation-mobile.png'),fullPage:true});assert.deepEqual(errors,[]);
     console.log('PASS adaptation browser: default off, optional creation, first-login instructions, durable progress/completion, normal start, delegated create/edit/revoke, immutable original, driver exclusion, desktop/mobile');
   } finally { if(browser)await browser.close();await fixture.close(); }
-})().catch(error=>{console.error(error.stack||error.message);process.exitCode=1;});
+})().catch(error=>{console.error(error.stack||error.message);process.exit(1);});

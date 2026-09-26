@@ -262,3 +262,56 @@ test('external recruiting enforces allowlists and durable factual activity', { t
     assert.ok(expect(await get(activityUrl)).rows.find(row => row.userId === external.id).candidatesAdded > 0);
   });
 });
+
+test('unified external lists combine only explicit active assignments and paginate across them', { timeout: 180_000 }, async t => {
+  const fixture = await createTestServer();
+  t.after(() => fixture.close());
+  const { request, devLogin, adminPool: db, ids } = fixture;
+  await db.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=$1', [ids.admin]);
+  const admin = await devLogin(ids.admin);
+  const userId = randomUUID();
+  await db.query('INSERT INTO users(id,display_name,role,active,approved) VALUES($1,$2,$3,true,true)', [userId, 'Unified external recruiter', 'external_recruiter']);
+  const ok = result => { assert.ok([200, 201].includes(result.status), JSON.stringify(result.body)); return result.body; };
+  const put = async (type, body, actor = admin) => ok(await request('PUT', `/recruitment/${type}`, body, actor.accessToken));
+  const records = [];
+  for (const [index, state] of ['active', 'active', 'expired', 'revoked', 'private'].entries()) {
+    const responsibilityScopeId = index ? randomUUID() : ids.scope;
+    if (index) await db.query('INSERT INTO responsibility_scopes VALUES($1,$2,$3)', [responsibilityScopeId, ids.project, `Assignment ${index}`]);
+    await db.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible) VALUES($1,$2,$3,$4,$5,true)', [userId, ids.legal, ids.region, ids.project, responsibilityScopeId]);
+    const demand = await put('requests', { id: randomUUID(), version: 0, responsibilityScopeId, title: `Demand ${index}`, city: 'Москва', kind: 'driver', quantity: 1, priority: 'normal', status: 'open', recruiterId: ids.admin, notes: 'PRIVATE COMPANY NOTES' });
+    const grant = await put('access', { responsibilityScopeId, userId, requestIds: [demand.id], status: 'active', version: 0, expiresAt: new Date(Date.now() + 86400000).toISOString() });
+    const candidate = await put('candidates', { id: randomUUID(), version: 0, responsibilityScopeId, fullName: `Candidate ${index}`, phone: `+7999000180${index}`, city: 'Москва', kind: 'driver', source: 'manual', recruiterId: userId });
+    const application = await put('applications', { id: randomUUID(), version: 0, responsibilityScopeId, candidateId: candidate.id, requestId: demand.id, stage: 'new', recruiterId: userId });
+    const task = await put('tasks', { id: randomUUID(), version: 0, responsibilityScopeId, candidateId: candidate.id, applicationId: application.id, title: `Task ${index}`, dueAt: new Date(Date.now() + 3600000).toISOString(), assigneeId: userId, status: 'open' });
+    records.push({ state, responsibilityScopeId, demand, candidate, grant, application, task });
+  }
+  const external = await devLogin(userId);
+  const get = async path => ok(await request('GET', path, undefined, external.accessToken));
+  await db.query("UPDATE recruitment_external_access SET expires_at=clock_timestamp()-interval '1 second' WHERE user_id=$1 AND responsibility_scope_id=$2", [userId, records[2].responsibilityScopeId]);
+  await db.query("UPDATE recruitment_external_access SET status='revoked' WHERE user_id=$1 AND responsibility_scope_id=$2", [userId, records[3].responsibilityScopeId]);
+  await db.query('UPDATE access_grants SET personal_data_visible=false WHERE user_id=$1 AND responsibility_scope_id=$2', [userId, records[4].responsibilityScopeId]);
+  const snapshot = await get('/recruitment');
+  const expected = new Set(records.slice(0, 2).map(item => item.candidate.id));
+  assert.deepEqual(new Set(snapshot.candidates.map(item => item.id)), expected);
+  assert.deepEqual(new Set(snapshot.requests.map(item => item.id)), new Set(records.slice(0, 2).map(item => item.demand.id)));
+  assert.equal(snapshot.applications.length, 2);
+  assert.equal(snapshot.tasks.length, 2);
+  assert.ok(snapshot.requests.every(item => !('notes' in item)));
+  const first = await get('/recruitment/worklist?pageSize=1&page=1');
+  const second = await get('/recruitment/worklist?pageSize=1&page=2');
+  assert.equal(first.total, 2);
+  assert.equal(first.counts.all, 2);
+  assert.equal(first.timeZone, 'Europe/Moscow');
+  assert.deepEqual(new Set([...first.items, ...second.items].map(item => item.candidate.id)), expected);
+  const record = records[1];
+  const detail = await get(`/recruitment/candidate?candidateId=${record.candidate.id}&responsibilityScopeId=${record.responsibilityScopeId}`);
+  assert.equal(detail.candidate.id, record.candidate.id);
+  const saved = await put('candidates', { ...record.candidate, notes: 'Updated from the combined list' }, external);
+  assert.equal(saved.responsibilityScopeId, record.responsibilityScopeId);
+  ok(await request('POST', '/recruitment/visits', {}, external.accessToken));
+  for (const hidden of records.slice(2)) assert.equal((await request('GET', `/recruitment/candidate?candidateId=${hidden.candidate.id}&responsibilityScopeId=${hidden.responsibilityScopeId}`, undefined, external.accessToken)).status, 403);
+  await db.query("UPDATE recruitment_external_access SET status='revoked' WHERE user_id=$1 AND responsibility_scope_id=$2", [userId, records[0].responsibilityScopeId]);
+  assert.deepEqual((await get('/recruitment')).candidates.map(item => item.id), [record.candidate.id]);
+  await db.query("UPDATE recruitment_external_access SET status='revoked' WHERE user_id=$1", [userId]);
+  assert.equal((await request('GET', '/recruitment/worklist', undefined, external.accessToken)).status, 403);
+});

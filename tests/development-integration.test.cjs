@@ -5,6 +5,42 @@ const assert = require("node:assert/strict");
 const { randomUUID } = require("node:crypto");
 const { createTestServer } = require("./local-test-server.cjs");
 
+test('development remains readable beyond 2000 tickets and paginates exact timestamps with scoped cursors', { timeout: 180000 }, async t => {
+  const f = await createTestServer();
+  t.after(() => f.close());
+  const { ids, adminPool: db } = f;
+  const admin = await f.devLogin(ids.admin), author = await f.devLogin(ids.dispatcher);
+  await db.query(`INSERT INTO development_tickets(id,legal_entity_id,region_id,project_id,responsibility_scope_id,title,description,section,status,author_id,author_name,updated_by)
+    SELECT gen_random_uuid(),$1,$2,$3,$4,'Pagination '||n,'Synthetic ticket','other','new',$5,'Synthetic author',$5 FROM generate_series(1,2000) n`,
+  [ids.legal, ids.region, ids.project, ids.scope, ids.dispatcher]);
+  const created = await f.request('PUT', '/development/tickets', { id: randomUUID(), responsibilityScopeId: ids.scope, version: 0,
+    title: 'Ticket 2001', description: 'Still available after creation', section: 'other', status: 'new' }, author.accessToken);
+  assert.equal(created.status, 200, JSON.stringify(created.body));
+  await db.query("UPDATE development_tickets SET updated_at='2026-09-20 12:00:00.123456+00'");
+  const base = `/development?responsibilityScopeId=${ids.scope}`;
+  for (const session of [admin, author]) {
+    const seen = new Set(); let before = null, pages = 0;
+    do {
+      const res = await f.request('GET', base + (before ? `&before=${before}` : ''), undefined, session.accessToken);
+      assert.equal(res.status, 200, JSON.stringify(res.body));
+      assert.ok(res.body.tickets.length <= 200);
+      assert.equal(res.body.hasMore, Boolean(res.body.nextBefore));
+      for (const item of res.body.tickets) { assert.equal(seen.has(item.id), false); seen.add(item.id); }
+      before = res.body.nextBefore;
+      assert.ok(++pages < 20, 'pagination must finish');
+    } while (before);
+    assert.equal(seen.size, 2001);
+    assert.ok(seen.has(created.body.id));
+  }
+  const privateTicket = await f.request('PUT', '/development/tickets', { id: randomUUID(), version: 0,
+    title: 'Administrator private ticket', responsibilityScopeId: ids.scope,
+    description: 'Private cursor', section: 'other', status: 'new' }, admin.accessToken);
+  assert.equal(privateTicket.status, 200, JSON.stringify(privateTicket.body));
+  assert.equal((await f.request('GET', base + `&before=${privateTicket.body.id}`, undefined, author.accessToken)).status, 404);
+  assert.equal((await f.request('GET', base + '&before=invalid', undefined, admin.accessToken)).status, 400);
+  assert.equal((await f.request('GET', base + `&before=${randomUUID()}`, undefined, admin.accessToken)).status, 404);
+});
+
 test("employees submit private development tickets and administrators carry them through both funnels", { timeout: 180_000 }, async t => {
   const fixture = await createTestServer();
   t.after(() => fixture.close());

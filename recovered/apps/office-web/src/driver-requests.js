@@ -1,9 +1,9 @@
+import { createCompanyWorkRequest } from "./company-work-request.js";
 // Driver requests use the application itself for both sides of the conversation.
 const statusName = { open: 'Новое', new: 'Новое', in_progress: 'В работе', resolved: 'Решено' };
 const kindName = { question: 'Вопрос', problem: 'Проблема', suggestion: 'Предложение' };
 const actionName = { take: 'Взять в работу', resolve: 'Отметить решённым', reopen: 'Открыть повторно', escalate: 'Передать администрации' };
 const dateLabel = value => new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value));
-const scopeLabel = value => value.label || [value.projectName, value.regionName, value.scopeName || value.responsibilityScopeName].filter(Boolean).join(' · ');
 const mergeMessages = (old, fresh) => [...new Map([...old, ...fresh].map(item => [item.id, item])).values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
 const mergeTickets = (old, fresh) => [...new Map([...old, ...fresh].map(item => [item.id, item])).values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
 
@@ -12,7 +12,7 @@ export function createDriverRequests(React, { request }) {
   const button = (label, onClick, props = {}) => h('button', { type: 'button', className: 'button', onClick, ...props }, label);
   const field = (label, element) => h('label', { className: 'driver-request-field' }, h('span', null, label), React.cloneElement(element, { 'aria-label': label }));
 
-  function Panel({ token, actor, scopeId, scopeName, refreshRequest = 0, onExpired, onDirtyChange, driver }) {
+  function Panel({ token, actor, scopeId, scopes = [], scopeName, refreshRequest = 0, onExpired, onDirtyChange, driver }) {
     const [catalog, setCatalog] = useState(null);
     const [tickets, setTickets] = useState([]);
     const [cursor, setCursor] = useState(null);
@@ -66,6 +66,10 @@ export function createDriverRequests(React, { request }) {
       if (old?.signature === signature) return old.key;
       const key = crypto.randomUUID(); requests.current.set(slot, { key, signature }); return key;
     }
+    const scopeList = useRef(scopes); scopeList.current = scopes.length ? scopes : [{ responsibilityScopeId: scopeId }];
+    const currentApi = useRef(api); currentApi.current = api;
+    const companyRequest = useRef(null);
+    if (!companyRequest.current) companyRequest.current = createCompanyWorkRequest((path, options) => currentApi.current(path, options), () => scopeList.current);
     async function loadList(next, replace = false) {
       const stamp = generation.current, epoch = accessEpoch.current, revision = ++listRevision.current;
       const pages = next || replace ? 1 : loadedPages.current;
@@ -74,7 +78,7 @@ export function createDriverRequests(React, { request }) {
         for (let index = 0; index < pages; index++) {
           const query = new URLSearchParams(driver ? { view: 'mine' } : { responsibilityScopeId: scopeId });
           if (cursorValue) query.set('cursor', cursorValue);
-          result = await api(`/communications/${driver ? 'tickets' : 'driver-requests'}?${query}`);
+          result = await (driver ? api : companyRequest.current)(`/communications/${driver ? 'tickets' : 'driver-requests'}?${query}`);
           items.push(...result.items); cursorValue = result.nextCursor;
           if (!cursorValue) break;
         }
@@ -224,7 +228,7 @@ export function createDriverRequests(React, { request }) {
         ticket.history?.length > 0 && h('details', { className: 'driver-request-history' }, h('summary', null, 'История обращения'), ...ticket.history.map((event, index) => h('p', { key: event.id || index }, `${event.occurredAt ? dateLabel(event.occurredAt) + ' · ' : ''}${event.actor?.name || ''} · ${({ created: 'Обращение создано', take: 'Взято в работу', resolve: 'Решено', reopen: 'Открыто повторно', escalate: 'Передано администрации' })[event.action] || 'Изменение статуса'}${event.reason ? ': ' + event.reason : ''}`)))
       ) : h('div', { className: 'driver-request-empty' }, h('h3', null, 'Выберите обращение'), h('p', null, driver ? 'Переписка с отделом и его ответы появятся здесь.' : 'Здесь можно прочитать обращение водителя, ответить и отметить решение.')));
     return h('section', { className: `driver-requests${driver ? ' is-driver' : ''}${selected ? ' has-selected' : ''}` },
-      h('header', { className: 'driver-requests-heading' }, h('div', null, h(driver ? 'h1' : 'h2', null, driver ? 'Связь с отделами' : 'Запросы водителей'), h('p', null, driver ? 'Пишите сотрудникам компании и получайте ответы прямо здесь.' : `Обращения, отправленные водителями${scopeName ? ` в области «${scopeName}»` : ' в выбранной рабочей области'}.`)), driver && button('Новое обращение', () => { setCreating(true); setError(''); }, { className: 'button primary', disabled: busy || loading || !catalog?.scopes.length })),
+      h('header', { className: 'driver-requests-heading' }, h('div', null, h(driver ? 'h1' : 'h2', null, driver ? 'Связь с отделами' : 'Запросы водителей'), h('p', null, driver ? 'Пишите сотрудникам компании и получайте ответы прямо здесь.' : 'Обращения водителей во все доступные отделы компании.')), driver && button('Новое обращение', () => { setCreating(true); setError(''); }, { className: 'button primary', disabled: busy || loading || !catalog?.scopes.length })),
       error && h('div', { className: 'driver-request-error', role: 'alert' }, error, button('Обновить', () => run(async () => { await loadList(null, true); if (selectedRef.current) await loadThread(selectedRef.current, true); }))),
       notice && h('p', { className: 'driver-request-notice', role: 'status' }, notice),
       creating && catalog && h('form', { className: 'driver-request-new', 'aria-label': 'Новое обращение', onSubmit: create },
@@ -232,13 +236,12 @@ export function createDriverRequests(React, { request }) {
         h('div', { className: 'driver-request-form-grid' },
           field('Отдел', h('select', { value: form.department, onChange: event => setForm(previous => ({ ...previous, department: event.target.value })), disabled: busy }, ...catalog.departments.map(value => h('option', { key: value.code, value: value.code }, value.label)))),
           field('Тип обращения', h('select', { value: form.kind, onChange: event => setForm(previous => ({ ...previous, kind: event.target.value })), disabled: busy }, ...Object.entries(kindName).map(([value, label]) => h('option', { key: value, value }, label)))),
-          field('Проект', h('select', { value: form.scopeId, onChange: event => setForm(previous => ({ ...previous, scopeId: event.target.value })), disabled: busy }, ...catalog.scopes.map(value => h('option', { key: value.responsibilityScopeId, value: value.responsibilityScopeId }, scopeLabel(value))))),
           field('Тема обращения', h('input', { value: form.subject, onChange: event => setForm(previous => ({ ...previous, subject: event.target.value })), minLength: 3, maxLength: 140, required: true, disabled: busy }))),
         field('Текст обращения', h('textarea', { value: form.text, onChange: event => setForm(previous => ({ ...previous, text: event.target.value })), maxLength: 3500, required: true, rows: 4, disabled: busy })),
         h('div', { className: 'driver-request-actions' }, h('button', { type: 'submit', className: 'button primary', disabled: busy || form.subject.trim().length < 3 || !form.text.trim() }, busy ? 'Отправка…' : 'Отправить обращение'), button('Отмена', closeCreation, { disabled: busy }))),
       loading ? h('p', { role: 'status' }, 'Загрузка обращений…') : h('div', { className: 'driver-requests-layout' },
         h('aside', { className: 'driver-request-list', 'aria-label': 'Список обращений' }, field('Поиск обращений', h('input', { type: 'search', value: filter, onChange: event => setFilter(event.target.value), placeholder: 'Тема, водитель или отдел' })),
-          !visible.length && h('p', { className: 'driver-request-empty' }, filter ? 'По запросу ничего не найдено.' : driver ? 'У вас пока нет обращений.' : `Нет доступных обращений водителей${scopeName ? ` в области «${scopeName}»` : ' в выбранной рабочей области'}. Здесь отображаются только обращения, отправленные из учётных записей водителей. Проверьте выбранную область команды. Сотрудники видят запросы своих отделов, администратор — всей доступной области.${actor.role === 'access_admin' ? ' Для проверки войдите от имени водителя через раздел «Сотрудники».' : ''}`),
+          !visible.length && h('p', { className: 'driver-request-empty' }, filter ? 'По запросу ничего не найдено.' : driver ? 'У вас пока нет обращений.' : `Нет доступных обращений водителей. Здесь отображаются только обращения, отправленные из учётных записей водителей. Сотрудники видят запросы своих отделов, администратор — все доступные обращения.${actor.role === 'access_admin' ? ' Для проверки войдите от имени водителя через раздел «Сотрудники».' : ''}`),
           ...visible.map(item => button(h(React.Fragment, null, h('span', { className: 'driver-request-list-meta' }, item.reference, h('span', { className: `driver-request-status is-${item.status}` }, statusName[item.status] || item.status)), h('strong', null, item.subject), h('span', null, driver ? department(item.department) : item.requester.name), h('small', null, `${driver ? '' : department(item.department) + ' · '}${dateLabel(item.updatedAt)}`), drafts[item.id]?.trim() && h('small', { className: 'driver-request-draft' }, 'Черновик')), () => open(item.id), { key: item.id, className: `driver-request-item${selected === item.id ? ' is-active' : ''}`, 'aria-pressed': selected === item.id, disabled: busy })),
           cursor && button('Ещё обращения', () => run(() => loadList(cursor)), { disabled: busy })), thread));
   }

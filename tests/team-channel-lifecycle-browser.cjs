@@ -131,4 +131,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log('PASS channel browser: administrator overflow reorder up/down, shared persistent order, archive/read-only live history, employee controls hidden, restore, delete cancellation/confirmation, reload, 390px menus');
   } finally { if (browser) await browser.close(); await f.close(); }
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack || error.message); process.exit(1); });

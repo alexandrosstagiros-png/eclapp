@@ -380,5 +380,5 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
   }
 })().catch((error) => {
   console.error(error.stack || error.message);
-  process.exitCode = 1;
+  process.exit(1);
 });

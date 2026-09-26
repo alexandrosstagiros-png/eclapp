@@ -1,3 +1,4 @@
+import { createCompanyWorkRequest } from "./company-work-request.js";
 const captions = { weekly: 'Недельные итоги', monthly: 'Месячные итоги' };
 const statusNames = { pending: 'Ожидается', overdue: 'Просрочен', submitted: 'Сдан' };
 const dateLabel = value => new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(value));
@@ -8,7 +9,11 @@ const formFor = report => ({ id: report.id, version: report.version, done: repor
 export function createTeamOutcomes(React, { request }) {
   const { createElement: h, useState, useRef, useEffect } = React;
   const button = (label, onClick, extra = {}) => h('button', { type: 'button', className: 'button', onClick, ...extra }, label);
-  function TeamOutcomes({ token, actor, scopeId, onExpired, onDirtyChange, onRecognitionChange }) {
+  function TeamOutcomes({ token, actor, scopeId, scopes = [], onExpired, onDirtyChange, onRecognitionChange }) {
+    const scopeList = useRef(scopes); scopeList.current = scopes.length ? scopes : [{ responsibilityScopeId: scopeId }];
+    const scopeKey = scopeList.current.map(value => value.responsibilityScopeId).join(':');
+    const companyRequest = useRef(null);
+    if (!companyRequest.current) companyRequest.current = createCompanyWorkRequest(request, () => scopeList.current);
     const [kind, setKind] = useState('weekly'), [periodStart, setPeriodStart] = useState(''), [data, setData] = useState(null);
     const [selected, setSelected] = useState(''), [report, setReport] = useState(null), [form, setForm] = useState(null), [original, setOriginal] = useState('');
     const [busy, setBusy] = useState(false), [loading, setLoading] = useState(true), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -27,7 +32,7 @@ export function createTeamOutcomes(React, { request }) {
     const scoped = path => `${path}?responsibilityScopeId=${encodeURIComponent(scopeId)}`;
     async function api(path, options = {}) {
       const controller = new AbortController(); controllers.current.add(controller);
-      try { return await request(path, { ...options, signal: controller.signal }, tokenRef.current); }
+      try { return await companyRequest.current(path, { ...options, signal: controller.signal }, tokenRef.current); }
       finally { controllers.current.delete(controller); }
     }
     function fail(reason) {
@@ -72,7 +77,7 @@ export function createTeamOutcomes(React, { request }) {
         finally { inFlight = false; }
       }, 15000);
       return () => { generation.current++; clearInterval(timer); for (const controller of controllers.current) controller.abort(); };
-    }, [scopeId, actor.id, kind, periodStart]);
+    }, [scopeKey, actor.id, kind, periodStart]);
     // A refreshed access token revalidates permissions without discarding an unsaved form.
     useEffect(() => {
       if (!scopeId || busyRef.current) return;
@@ -142,7 +147,7 @@ export function createTeamOutcomes(React, { request }) {
             ...reportKeys.map(key => h('label', { key }, fields[key], h('textarea', { value: form[key], 'aria-label': fields[key], maxLength: 6000, rows: 4, disabled: busy, onChange: event => change(key, event.target.value) }))),
             h('fieldset', { className: 'team-outcomes-thanks', disabled: busy }, h('legend', null, 'Поблагодарить коллег — необязательно'),
               h('p', null, 'После сдачи каждый выбранный коллега получит одну корону за этот отчёт.'),
-              h('div', { className: 'team-outcomes-people' }, ...data.people.map(person => {
+              h('div', { className: 'team-outcomes-people' }, ...(report.eligiblePeople || data.people).map(person => {
                 const selectedGratitude = form.gratitude.find(entry => entry.recipientId === person.id);
                 return h('label', { key: person.id }, h('input', { type: 'checkbox', checked: Boolean(selectedGratitude), disabled: busy || (!selectedGratitude && form.gratitude.length >= 20),
                   onChange: event => change('gratitude', event.target.checked ? [...form.gratitude, { recipientId: person.id, reason: '' }] : form.gratitude.filter(entry => entry.recipientId !== person.id)) }), person.displayName);

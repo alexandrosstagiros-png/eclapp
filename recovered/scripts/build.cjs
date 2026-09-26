@@ -28,7 +28,7 @@ async function build() {
   const web = path.join(root, "apps/office-web");
   const moduleNames = new Map();
   const modules = [];
-  for (const name of ["planning-templates", "planning-fields", "planning-model", "planning-builder", "planning-calendar-model", "planning-calendar", "planning", "attachment-photos", "recruitment-onboarding", "recruitment", "tenders", "development", "team-media", "inspection-workflow", "chief-mechanic-access", "employee-planning-access", "driver-requests", "profile", "birthdays", "team-notifications", "team-tasks", "team-outcomes", "team-response-metrics", "team", "fleet-operations", "fleet-maintenance"]) {
+  for (const name of ["company-work-request", "planning-templates", "planning-fields", "planning-model", "planning-builder", "planning-calendar-model", "planning-calendar", "planning", "attachment-photos", "recruitment-onboarding", "recruitment", "tenders", "development", "team-media", "inspection-workflow", "chief-mechanic-access", "employee-planning-access", "driver-requests", "profile", "birthdays", "team-notifications", "team-tasks", "team-outcomes", "team-response-metrics", "team", "fleet-operations", "fleet-maintenance"]) {
     let content = fs.readFileSync(path.join(web, `src/${name}.js`), "utf8");
     for (const [dependency, filename] of moduleNames) content = content.replaceAll(`./${dependency}.js`, `./${filename}`);
     const compiled = await minify(content, { module: true, compress: true, mangle: true });

@@ -47,7 +47,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.screenshot({ path: path.join(out, 'recruiter-created-desktop.png'), fullPage: true });
 
     const impersonationResponse = page.waitForResponse(response => response.url().endsWith('/auth/impersonate') && response.request().method() === 'POST');
-    const firstSnapshot = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/recruitment') && response.request().method() === 'GET');
+    const firstSnapshot = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/recruitment/worklist') && response.request().method() === 'GET');
     await card.getByRole('button', { name: 'Войти как сотрудник', exact: true }).click();
     const impersonation = await impersonationResponse;
     assert.equal(impersonation.status(), 200);
@@ -56,7 +56,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(child.actor.role, 'recruiter');
     assert.equal((await firstSnapshot).status(), 200);
     await page.getByRole('heading', { name: 'Рекрутинг', exact: true }).waitFor();
-    await page.getByRole('heading', { name: 'Начните подбор', exact: true }).waitFor();
+    await page.getByRole('heading', { name: 'Нет кандидатов по выбранным условиям', exact: true }).waitFor();
     const navigation = page.getByRole('navigation', { name: 'Разделы', exact: true });
     assert.equal(await navigation.getByRole('button', { name: 'Рекрутинг', exact: true }).getAttribute('aria-current'), 'page');
     for (const label of ['Планирование', 'Рейсы', 'Финансы и 1С', 'Сотрудники']) {
@@ -65,7 +65,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.getByText('Нет доступных областей подбора', { exact: true }).count(), 0);
     console.log('PASS create recruiter through employee form, impersonate and open the recruiting workspace with restricted navigation');
 
-    await page.getByRole('button', { name: 'Создать потребность', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Разделы рекрутинга', exact: true }).getByRole('button', { name: 'Потребности', exact: true }).click();
+    await page.getByRole('button', { name: 'Создать потребность', exact: true }).first().click();
     const dialog = page.getByRole('dialog', { name: 'Потребность в подборе', exact: true });
     await dialog.getByLabel('Название потребности', { exact: true }).fill('Синтетическая потребность браузера');
     await dialog.getByLabel('Город', { exact: true }).fill('Москва');
@@ -101,4 +102,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await fixture.close();
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

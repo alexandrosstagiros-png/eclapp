@@ -88,9 +88,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await page.goto(`${fixture.origin}/?section=${section}`);
       return page;
     }
-    async function imageReady(locator) {
-      await locator.waitFor(); await locator.evaluate(image => image.decode());
-      assert.ok(await locator.evaluate(image => image.naturalWidth > 0));
+    async function imageReady(photo) {
+      // Remote previews create their <img> only after IntersectionObserver sees
+      // the card. Scroll its existing container into view before awaiting it.
+      await photo.scrollIntoViewIfNeeded();
+      const image = photo.locator('img').first();
+      await image.waitFor(); await image.evaluate(node => node.decode());
+      assert.ok(await image.evaluate(node => node.naturalWidth > 0));
     }
     async function badge(page, count) {
       const marker = page.getByLabel(`Требуют доработки: ${count}`, { exact: true });
@@ -143,7 +147,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await brakes.locator('textarea').inputValue(), 'Тормоза проверены');
     assert.equal(await dp.getByLabel(/^Общий комментарий механику/).inputValue(), original.comment);
     assert.equal(await front.locator('.ko-draft-photo').count(), 2);
-    await imageReady(front.locator('.ko-draft-photo img').first());
+    await imageReady(front.locator('.ko-draft-photo').first());
     await badge(dp, 2);
     assert.equal((await api(driver, 'GET', '/inspections/attention')).count, 2, 'Opening correction does not dismiss the return');
     await note.locator('textarea').fill('Уточнённый ответ без повторных фото');
@@ -156,7 +160,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await dp.getByLabel(/^Общий комментарий механику/).inputValue(), 'Уточнённый общий комментарий');
     await front.locator('.ko-draft-photo').nth(1).waitFor();
     assert.equal(await front.locator('.ko-draft-photo').count(), 2);
-    await imageReady(front.locator('.ko-draft-photo img').first());
+    await imageReady(front.locator('.ko-draft-photo').first());
     const second = await sendCorrection(dp);
     assert.equal(second.revision, 2); assert.equal(second.occurredAt, original.occurredAt);
     assert.deepEqual(second.answers.find(answer => answer.itemId === 'front_photo').photoIds.sort(), [photo1.id, photo2.id].sort());
@@ -165,7 +169,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
     const mp = await pageFor(chief, 'inspections');
     await selectReport(mp, 'DEMO-001');
-    await imageReady(mp.locator('.ko-review-panel .ko-photo-item img').first());
+    await imageReady(mp.locator('.ko-review-panel .ko-photo-item').first());
     const recentCard = mp.locator('.ko-review-panel .ko-photo-item').first();
     assert.equal(await recentCard.getByRole('button', { name: /^Удалить фото:/ }).isDisabled(), true);
     const recent = (await api(chief, 'GET', `/inspections/submissions/${second.id}`)).photos[0];
@@ -179,7 +183,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await front.locator('.ko-draft-photo').nth(1).getByRole('button', { name: /^Удалить фото/ }).click();
     assert.equal(await front.locator('.ko-draft-photo').count(), 1);
     await front.locator('input[type="file"]').first().setInputFiles({ name: 'replacement.png', mimeType: 'image/png', buffer: png });
-    await imageReady(front.locator('.ko-draft-photo img').nth(1));
+    await imageReady(front.locator('.ko-draft-photo').nth(1));
     const submissionPattern = `**/api/v1/inspections/trips/${ids.trips[0]}/submissions`;
     let racedBody;
     await dp.route(submissionPattern, async route => {
@@ -211,7 +215,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await note.locator('textarea').inputValue(), 'Уточнённый ответ без повторных фото');
     assert.equal(await front.locator('.ko-draft-photo').count(), 1);
     await front.locator('input[type="file"]').first().setInputFiles({ name: 'replacement-after-delete.png', mimeType: 'image/png', buffer: png });
-    await imageReady(front.locator('.ko-draft-photo img').nth(1));
+    await imageReady(front.locator('.ko-draft-photo').nth(1));
     const third = await sendCorrection(dp);
     assert.equal(third.revision, 3); assert.equal(uploads.length, 2, 'Recovery uploads only the missing photo and reuses the previous successful upload');
     const oldIds = new Set([photo1.id, photo2.id]);
@@ -274,4 +278,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await fixture.close();
   }
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack || error.message); process.exit(1); });

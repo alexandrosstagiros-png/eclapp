@@ -32,8 +32,11 @@ let IdentityRepository = class IdentityRepository {
         return result.rows;
     }
     async lockUsers(client, ids) {
-        // All identity mutations lock user rows in the same order before invitation/session rows.
-        await client.query("SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE", [ids]);
+        // Serialize identity/grant mutations and session revalidation in one order.
+        // User IDs are immutable: KEY SHARE locks for references (mentions, chat
+        // members, audit actors) must remain compatible with these locks, or an
+        // unrelated reader waiting for a scope lock can deadlock its writer.
+        await client.query("SELECT id FROM users WHERE id = ANY($1::uuid[]) ORDER BY id FOR NO KEY UPDATE", [ids]);
     }
     async user(client, id) {
         const result = await client.query("SELECT * FROM users WHERE id = $1", [id]);

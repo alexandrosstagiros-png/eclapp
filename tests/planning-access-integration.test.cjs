@@ -319,7 +319,7 @@ test('administrators provision and repair planning access through scoped, audite
         const deadline = Date.now() + 5000;
         let waiting = false;
         while (Date.now() < deadline) {
-          waiting = (await db.query("SELECT 1 FROM pg_stat_activity WHERE usename='transport_app' AND wait_event_type='Lock' AND query LIKE '%FOR UPDATE%'")).rowCount > 0;
+          waiting = (await db.query("SELECT 1 FROM pg_stat_activity WHERE usename='transport_app' AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM users WHERE%'")).rowCount > 0;
           if (waiting) break;
           await delay(20);
         }

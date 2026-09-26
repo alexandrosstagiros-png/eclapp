@@ -133,4 +133,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors,[]);
     console.log('PASS controls browser: own/admin edit/delete, other-owner controls hidden, overflow keyboard/outside/focus/viewport, empty branch, live updates, reactions add/remove, deleted branch, hourly moderation and early disable, server throttle, draft preserved, mobile');
   }finally{if(browser)await browser.close();await f.close();}
-})().catch(e=>{console.error(e.stack||e.message);process.exitCode=1;});
+})().catch(e=>{console.error(e.stack||e.message);process.exit(1);});

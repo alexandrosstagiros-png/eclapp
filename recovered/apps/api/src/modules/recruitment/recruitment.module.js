@@ -77,9 +77,9 @@ class RecruitmentService {
   }
   selection(actor, id) {
     if (id) return this.scope(actor, uuid(id, 'проект'));
-    if (actor.role === 'external_recruiter') forbidden('Выберите назначенный проект.');
-    if (!actor.grants.length) forbidden('Для рекрутинга необходим доступ к персональным данным компании.');
-    return { readScopes: actor.grants };
+    const scopes = actor.grants.filter(grant => grant.personalDataVisible);
+    if (!scopes.length) forbidden('Для рекрутинга необходим доступ к персональным данным компании.');
+    return { readScopes: scopes };
   }
   async recordScope(client, actor, type, id, suppliedScopeId) {
     if (suppliedScopeId) return this.scope(actor, uuid(suppliedScopeId));
@@ -119,7 +119,16 @@ class RecruitmentService {
   async context(supplied) {
     return this.database.transaction(async client => {
       const actor = await this.current(client, supplied);
-      if(actor.role !== 'external_recruiter') return {scopes:requireBounded(actor.grants.map(({personalDataVisible,...scope})=>scope))};
+      if(actor.role !== 'external_recruiter') {
+        const scopes = requireBounded(actor.grants.map(({ personalDataVisible, ...scope }) => scope));
+        const counts = await client.query(`SELECT responsibility_scope_id AS id,count(*)::integer AS records FROM (
+          SELECT responsibility_scope_id FROM recruitment_candidates WHERE responsibility_scope_id=ANY($1::uuid[])
+          UNION ALL SELECT responsibility_scope_id FROM recruitment_requests WHERE responsibility_scope_id=ANY($1::uuid[])
+        ) records GROUP BY responsibility_scope_id`, [scopes.map(scope => scope.responsibilityScopeId)]);
+        const population = new Map(counts.rows.map(row => [row.id, row.records]));
+        const preferred = scopes.reduce((best, scope) => !best || (population.get(scope.responsibilityScopeId) || 0) > (population.get(best.responsibilityScopeId) || 0) ? scope : best, null);
+        return { scopes, defaultResponsibilityScopeId: preferred?.responsibilityScopeId || null };
+      }
       const result = await client.query(`SELECT g.legal_entity_id AS "legalEntityId",g.region_id AS "regionId",
         g.project_id AS "projectId",g.responsibility_scope_id AS "responsibilityScopeId",
         le.name AS "legalEntityName",r.name AS "regionName",r.time_zone AS "timeZone",p.name AS "projectName",rs.name AS "scopeName"

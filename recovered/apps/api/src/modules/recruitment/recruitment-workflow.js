@@ -77,7 +77,7 @@ function createWorkflowMethods({tuple,whereScope,whereRead,whereCandidates,colum
         if(source) {const src=bind(source);conditions.push(`(c.source=${src} OR EXISTS(SELECT 1 FROM recruitment_contacts ct WHERE ct.candidate_id=c.id AND ct.source=${src}${contactAccess}))`);}
         if(stage) conditions.push(`EXISTS(SELECT 1 FROM recruitment_applications a WHERE a.candidate_id=c.id AND a.stage=${bind(stage)}${appAccess})`);
         if(search){const pattern=bind(`%${search.replace(/[\\%_]/g,'\\$&')}%`);conditions.push(`(c.full_name ILIKE ${pattern} OR c.phone ILIKE ${pattern} OR EXISTS(SELECT 1 FROM recruitment_applications a JOIN recruitment_requests r ON r.id=a.request_id WHERE a.candidate_id=c.id AND r.title ILIKE ${pattern}${appAccess}))`);}
-        const tz=(scope.readScopes?.[0]?.timeZone) || (await client.query('SELECT time_zone FROM regions WHERE id=$1',[scope.regionId])).rows[0]?.time_zone || 'UTC';
+        const tz=(scope.readScopes?.[0]?.timeZone) || (await client.query('SELECT time_zone FROM regions WHERE id=$1',[scope.readScopes?.[0]?.regionId || scope.regionId])).rows[0]?.time_zone || 'UTC';
         const zone=scope.readScopes ? '(SELECT time_zone FROM regions WHERE id=c.region_id)' : bind(tz),today=`(clock_timestamp() AT TIME ZONE ${zone})::date`;
         const task=(where)=>`EXISTS(SELECT 1 FROM recruitment_tasks t WHERE t.candidate_id=c.id AND t.status='open'${taskAccess}${selectedTaskAssignee} AND ${where})`;
         const app=(where)=>`EXISTS(SELECT 1 FROM recruitment_applications a WHERE a.candidate_id=c.id${appAccess} AND ${where})`;

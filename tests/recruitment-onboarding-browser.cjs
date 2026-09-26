@@ -95,7 +95,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await builder.getByLabel('Название формы', { exact: true }).fill('Синтетическая форма самозанятого');
     await builder.getByLabel('Направление оформления', { exact: true }).fill('Тестовое направление');
     await builder.getByLabel('Тип оформления', { exact: true }).selectOption('self_employed');
-    await builder.getByLabel('Проект формы', { exact: true }).selectOption(ids.scope);
+    assert.equal(await builder.getByLabel('Проект формы', { exact: true }).count(), 0);
     await builder.getByLabel('Информация об обработке данных', { exact: true }).fill('Синтетическое уведомление для локальной проверки.');
     await builder.getByLabel('Название поля 2', { exact: true }).fill('ИНН');
     await builder.getByLabel('Тип поля 2', { exact: true }).selectOption('text');

@@ -11,7 +11,8 @@ const { AuditService } = require('../audit/application/audit.service');
 const { fail, conflict, forbidden, unavailable, uuid, ticketInput, commentInput } = require('./development-input');
 
 const ROLES = Object.freeze(['driver', 'dispatcher', 'manager', 'recruiter', 'tender_specialist', 'document_specialist', 'mechanic', 'access_admin', 'auditor']);
-const MAX_TICKETS = 2000;
+const MAX_SCOPES = 2000;
+const PAGE_SIZE = 200;
 const MAX_EVENTS = 10000;
 const SCOPE_COLUMNS = Object.freeze({ legalEntityId: 'legal_entity_id', regionId: 'region_id', projectId: 'project_id', responsibilityScopeId: 'responsibility_scope_id' });
 const FIELDS = Object.freeze({ title: 'title', description: 'description', section: 'section', status: 'status' });
@@ -79,18 +80,22 @@ class DevelopmentService {
         JOIN legal_entities le ON le.id=g.legal_entity_id JOIN regions r ON r.id=g.region_id
         JOIN projects p ON p.id=g.project_id AND p.legal_entity_id=g.legal_entity_id AND p.region_id=g.region_id
         JOIN responsibility_scopes rs ON rs.id=g.responsibility_scope_id AND rs.project_id=g.project_id
-        WHERE g.user_id=$1 ORDER BY r.name,p.name,rs.name,g.responsibility_scope_id LIMIT $2`, [actor.id, MAX_TICKETS + 1]);
-      return { scopes: bounded(result.rows, MAX_TICKETS, 'Слишком много областей работы. Обратитесь к администратору.').map(response), canManage: canManage(actor) };
+        WHERE g.user_id=$1 ORDER BY r.name,p.name,rs.name,g.responsibility_scope_id LIMIT $2`, [actor.id, MAX_SCOPES + 1]);
+      return { scopes: bounded(result.rows, MAX_SCOPES, 'Слишком много областей работы. Обратитесь к администратору.').map(response), canManage: canManage(actor) };
     });
   }
-  async read(supplied, scopeId) {
+  async read(supplied, scopeId, beforeId) {
     return this.database.transaction(async client => {
       const actor = await this.current(client, supplied);
       const scope = await this.scope(client, actor, uuid(scopeId, 'область работы'));
+      const before = beforeId === undefined ? null : uuid(beforeId, 'курсор');
+      if (before) await this.reference(client, actor, scope, before);
       const result = await client.query(`SELECT ${TICKET_COLUMNS} FROM development_tickets
         WHERE ${whereScope()} AND ($5::boolean OR author_id=$6)
-        ORDER BY updated_at DESC,id LIMIT $7`, [...tuple(scope), canManage(actor), actor.id, MAX_TICKETS + 1]);
-      return { tickets: bounded(result.rows, MAX_TICKETS, 'Слишком много тикетов для одного просмотра. Обратитесь к администратору для выгрузки данных.').map(row => publicTicket(row, actor, scope)) };
+        AND ($7::uuid IS NULL OR (updated_at,id)<(SELECT updated_at,id FROM development_tickets WHERE id=$7))
+        ORDER BY updated_at DESC,id DESC LIMIT $8`, [...tuple(scope), canManage(actor), actor.id, before, PAGE_SIZE + 1]);
+      const rows = result.rows.slice(0, PAGE_SIZE), hasMore = result.rows.length > PAGE_SIZE;
+      return { tickets: rows.map(row => publicTicket(row, actor, scope)), hasMore, nextBefore: hasMore ? rows.at(-1).id : null };
     });
   }
   async reference(client, actor, scope, id) {
@@ -210,7 +215,7 @@ Inject(AuditService)(DevelopmentService, undefined, 2);
 class DevelopmentController {
   constructor(service) { this.service = service; }
   context(actor) { return this.service.context(actor); }
-  read(actor, scopeId) { return this.service.read(actor, scopeId); }
+  read(actor, scopeId, before) { return this.service.read(actor, scopeId, before); }
   detail(actor, id, scopeId) { return this.service.detail(actor, id, scopeId); }
   saveTicket(actor, body, request) { return this.service.save(actor, body, request.correlationId); }
   saveComment(actor, body, request) { return this.service.comment(actor, body, request.correlationId); }
@@ -226,6 +231,7 @@ for (const [name, decorator] of [['context', Get('context')], ['read', Get()], [
   if (name.startsWith('save')) { Body()(DevelopmentController.prototype, name, 1); Req()(DevelopmentController.prototype, name, 2); }
 }
 Query('responsibilityScopeId')(DevelopmentController.prototype, 'read', 1);
+Query('before')(DevelopmentController.prototype, 'read', 2);
 Param('id')(DevelopmentController.prototype, 'detail', 1);
 Query('responsibilityScopeId')(DevelopmentController.prototype, 'detail', 2);
 class DevelopmentModule {}

@@ -14,7 +14,7 @@ function sameScope(first, second) { return tuple(first).every((value, index) => 
 class TeamInsightsService {
   constructor(database, teamService) { this.database = database; this.team = teamService; this.running = false; }
   async lockUsers(client, userIds) {
-    await client.query('SELECT id FROM users WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE', [[...new Set(userIds.filter(Boolean))].sort()]);
+    await this.team.identity.lockUsers(client, userIds.filter(Boolean));
   }
   async eligibleRecipients(client, scope, userIds) {
     if (!userIds.length) return [];

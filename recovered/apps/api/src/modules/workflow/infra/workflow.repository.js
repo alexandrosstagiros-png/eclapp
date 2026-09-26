@@ -42,7 +42,11 @@ let WorkflowRepository = class WorkflowRepository {
       FROM access_grants g JOIN legal_entities le ON le.id=g.legal_entity_id JOIN regions r ON r.id=g.region_id
       JOIN projects p ON p.id=g.project_id JOIN responsibility_scopes rs ON rs.id=g.responsibility_scope_id
       WHERE g.user_id=$1 ORDER BY r.name,p.name,rs.name`, [actor.id]);
-        const vehicles = await client.query(`SELECT v.id,v.label,v.body_type AS "bodyType",v.capacity_kg AS "capacityKg",v.fleet_type AS "fleetType"
+        const vehicles = await client.query(`SELECT v.id,v.label,v.body_type AS "bodyType",v.capacity_kg AS "capacityKg",v.fleet_type AS "fleetType",
+      (SELECT jsonb_agg(DISTINCT jsonb_build_object('projectId',t.project_id,'responsibilityScopeId',t.responsibility_scope_id))
+        FROM trips t JOIN access_grants g ON g.user_id=$1
+        AND g.legal_entity_id=t.legal_entity_id AND g.region_id=t.region_id AND g.project_id=t.project_id
+        AND g.responsibility_scope_id=t.responsibility_scope_id WHERE t.vehicle_id=v.id) AS scopes
       FROM vehicles v WHERE EXISTS(SELECT 1 FROM trips t JOIN access_grants g ON g.user_id=$1
         AND g.legal_entity_id=t.legal_entity_id AND g.region_id=t.region_id AND g.project_id=t.project_id
         AND g.responsibility_scope_id=t.responsibility_scope_id WHERE t.vehicle_id=v.id)

@@ -67,7 +67,7 @@ test('recruitment is shared inside a company while project provenance, workflows
   await t.test('external recruiters remain limited to assigned requests and own records, and grant revocation takes effect',async()=>{
     const externalDemand=await put('requests',requestInput(a,admin.id));
     await put('access',{responsibilityScopeId:a[3],userId:external.id,requestIds:[externalDemand.id],status:'active',version:0,expiresAt:new Date(Date.now()+86400000).toISOString()});
-    assert.equal((await request('GET','/recruitment',undefined,external.accessToken)).status,403);assert.equal((await request('GET',`/recruitment?responsibilityScopeId=${b[3]}`,undefined,external.accessToken)).status,403);
+    assert.equal((await request('GET','/recruitment',undefined,external.accessToken)).status,200);assert.equal((await request('GET',`/recruitment?responsibilityScopeId=${b[3]}`,undefined,external.accessToken)).status,403);
     const own=await put('candidates',candidateInput(a,external.id,{phone:'+79991234569'}),external);
     const externalData=await get(`/recruitment?responsibilityScopeId=${a[3]}`,external);assert.deepEqual(externalData.candidates.map(item=>item.id),[own.id]);assert.deepEqual(externalData.requests.map(item=>item.id),[externalDemand.id]);
     // A shared candidate that only participates in an unassigned project must

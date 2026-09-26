@@ -1,3 +1,4 @@
+import { createCompanyWorkRequest } from "./company-work-request.js";
 // SPDX-License-Identifier: MIT
 const uid = () => crypto.randomUUID();
 const STATUS = {
@@ -104,13 +105,18 @@ export function createTeamTasks(React, { request }) {
     token,
     actor,
     scopeId,
+    scopes = [],
     onExpired,
     onDirtyChange,
     onOpenConversation,
     initialTaskId = "",
     openTaskRequest,
   }) {
-    const key = `${actor?.id}:${actor?.role}:${scopeId}`;
+    const scopeList = useRef(scopes);
+    scopeList.current = scopes.length ? scopes : [{ responsibilityScopeId: scopeId }];
+    const key = `${actor?.id}:${actor?.role}:${scopeList.current.map(value => value.responsibilityScopeId).join(":")}`;
+    const companyRequest = useRef(null);
+    if (!companyRequest.current) companyRequest.current = createCompanyWorkRequest(request, () => scopeList.current);
     const [activeKey, setActiveKey] = useState(key),
       [organization, setOrganization] = useState({
         people: [],
@@ -147,6 +153,7 @@ export function createTeamTasks(React, { request }) {
       alive = useRef(true),
       epoch = useRef(0),
       loadVersion = useRef(0),
+      pendingLoad = useRef(null),
       detailVersion = useRef(0),
       busyRef = useRef(false),
       busyOwner = useRef(null),
@@ -166,7 +173,7 @@ export function createTeamTasks(React, { request }) {
       epoch.current === stamp.epoch;
     const stamp = () => ({ key, epoch: epoch.current });
     const api = (path, options = {}) =>
-      request(path, options, live.current.token);
+      companyRequest.current(path, options, live.current.token);
     const scoped = (path) =>
       `${path}?responsibilityScopeId=${encodeURIComponent(scopeId)}`;
     const fail = (reason) => {
@@ -188,8 +195,9 @@ export function createTeamTasks(React, { request }) {
     );
     const name = (id) =>
       peopleById.get(id)?.displayName || "Недоступный сотрудник";
+    const taskScope = form?.existing?.responsibilityScopeId;
     const assignable = organization.people.filter((person) =>
-      organization.assignableIds.includes(person.id),
+      (organization.byScope?.[taskScope]?.assignableIds || organization.assignableIds).includes(person.id),
     );
     function clearTask(id) {
       setTasks((items) => items.filter((item) => item.id !== id));
@@ -222,13 +230,18 @@ export function createTeamTasks(React, { request }) {
       );
     }
     async function load(more = false) {
-      if (!scopeId || busyRef.current || (more && !pagination.nextBefore))
+      if (!scopeId || busyRef.current || pendingLoad.current || (more && !pagination.nextBefore))
         return;
+      // A paced company read can outlast the polling interval. Keep the active
+      // read instead of invalidating it on every tick before it can finish.
+      const controller = new AbortController();
+      pendingLoad.current = controller;
+      const read = path => api(path, { signal: controller.signal });
       const target = stamp(),
         revision = ++loadVersion.current;
       if (!more) setLoading(true);
       try {
-        let result = await api(
+        let result = await read(
           `${scoped("/team/tasks")}${more ? `&before=${encodeURIComponent(pagination.nextBefore)}` : ""}`,
         );
         const wanted = Math.max(100, tasksRef.current.length);
@@ -240,12 +253,12 @@ export function createTeamTasks(React, { request }) {
           rows.length < wanted
         ) {
           if (!valid(target) || revision !== loadVersion.current) return;
-          result = await api(
+          result = await read(
             `${scoped("/team/tasks")}&before=${encodeURIComponent(result.nextBefore)}`,
           );
           rows.push(...(result.tasks || []));
         }
-        const org = await api(scoped("/team/organization"));
+        const org = await read(scoped("/team/organization"));
         if (
           !valid(target) ||
           revision !== loadVersion.current ||
@@ -267,7 +280,7 @@ export function createTeamTasks(React, { request }) {
           : detailRef.current;
         if (currentDetail) {
           try {
-            const latest = await api(
+            const latest = await read(
               scoped(`/team/tasks/${encodeURIComponent(currentDetail.id)}`),
             );
             if (valid(target) && revision === loadVersion.current) {
@@ -292,6 +305,7 @@ export function createTeamTasks(React, { request }) {
           }
         }
       } catch (reason) {
+        if (controller.signal.aborted) return;
         if (!valid(target) || revision !== loadVersion.current) return;
         if ([401, 403].includes(reason?.status)) {
           setTasks([]);
@@ -307,6 +321,7 @@ export function createTeamTasks(React, { request }) {
         }
         setError(fail(reason));
       } finally {
+        if (pendingLoad.current === controller) pendingLoad.current = null;
         if (valid(target) && revision === loadVersion.current)
           setLoading(false);
       }
@@ -318,6 +333,8 @@ export function createTeamTasks(React, { request }) {
       busyOwner.current = owner;
       busyRef.current = true;
       ++loadVersion.current;
+      pendingLoad.current?.abort();
+      pendingLoad.current = null;
       setBusy(kind);
       setLoading(false);
       setError("");
@@ -349,10 +366,14 @@ export function createTeamTasks(React, { request }) {
       return () => {
         alive.current = false;
         epoch.current++;
+        pendingLoad.current?.abort();
+        pendingLoad.current = null;
         live.current.onDirtyChange?.(false);
       };
     }, []);
     useEffect(() => {
+      pendingLoad.current?.abort();
+      pendingLoad.current = null;
       epoch.current++;
       loadVersion.current++;
       detailVersion.current++;
@@ -384,6 +405,8 @@ export function createTeamTasks(React, { request }) {
       return () => {
         epoch.current++;
         loadVersion.current++;
+        pendingLoad.current?.abort();
+        pendingLoad.current = null;
       };
     }, [key]);
     useEffect(() => {
@@ -559,6 +582,7 @@ export function createTeamTasks(React, { request }) {
       };
       setEmployeeForm({
         id: person.id,
+        responsibilityScopeId: person.responsibilityScopeId || scopeId,
         version: person.version,
         operationId: uid(),
         ...original,
@@ -586,22 +610,27 @@ export function createTeamTasks(React, { request }) {
       await mutate(
         "employee",
         () =>
-          api(`/team/organization/employees/${encodeURIComponent(value.id)}`, {
+          request(`/team/organization/employees/${encodeURIComponent(value.id)}`, {
             method: "PUT",
             body: JSON.stringify({
-              responsibilityScopeId: scopeId,
+              responsibilityScopeId: value.responsibilityScopeId,
               operationId: value.operationId,
               version: value.version,
               managerId: value.managerId || null,
               positionId: value.positionId || null,
             }),
-          }),
-        (person) => {
+          }, live.current.token),
+        (saved) => {
+          const person = { ...saved, responsibilityScopeId: value.responsibilityScopeId };
           setOrganization((before) => ({
             ...before,
             people: before.people.map((item) =>
               item.id === person.id ? person : item,
             ),
+            ...(before.byScope?.[value.responsibilityScopeId] ? { byScope: {
+              ...before.byScope,
+              [value.responsibilityScopeId]: { ...before.byScope[value.responsibilityScopeId], people: before.byScope[value.responsibilityScopeId].people.map(item => item.id === person.id ? person : item) },
+            } } : {}),
           }));
           const original = {
             managerId: person.managerId || "",
@@ -621,7 +650,7 @@ export function createTeamTasks(React, { request }) {
           const org = await api(scoped("/team/organization"));
           if (valid(target)) {
             acceptOrganization(org);
-            const person = org.people.find((person) => person.id === value.id);
+            const person = (org.byScope?.[value.responsibilityScopeId]?.people || (org.byScope ? [] : org.people)).find((person) => person.id === value.id);
             setEmployeeForm((before) =>
               before?.id === value.id
                 ? { ...before, conflict: person || { unavailable: true } }
@@ -838,7 +867,9 @@ export function createTeamTasks(React, { request }) {
     }
     function organizationDialog() {
       if (!orgOpen || !organization.canManage) return null;
-      const employee = employeeForm && peopleById.get(employeeForm.id);
+      const employeeOrganization = organization.byScope?.[employeeForm?.responsibilityScopeId] || (organization.byScope ? { people: [], positions: [] } : organization);
+      const employee = employeeForm && employeeOrganization.people.find(person => person.id === employeeForm.id);
+      const employeePositions = organization.byScope ? organization.positions.filter(position => position.responsibilityScopeId === employeeForm?.responsibilityScopeId) : organization.positions;
       return h(
         Dialog,
         {
@@ -949,7 +980,7 @@ export function createTeamTasks(React, { request }) {
                           })),
                       },
                       h("option", { value: "" }, "Не назначена"),
-                      ...organization.positions.map((position) =>
+                      ...employeePositions.map((position) =>
                         h(
                           "option",
                           { key: position.id, value: position.id },
@@ -977,7 +1008,7 @@ export function createTeamTasks(React, { request }) {
                         { value: "" },
                         "Нет руководителя — верхний уровень",
                       ),
-                      ...organization.people
+                      ...employeeOrganization.people
                         .filter((person) => person.id !== employee.id)
                         .map((person) =>
                           h(
