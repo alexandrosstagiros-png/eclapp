@@ -1,6 +1,6 @@
 {
   "name": "ecl-native",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "ЕЦЛ — приложения для macOS, Windows, Android и iOS",
   "type": "module",

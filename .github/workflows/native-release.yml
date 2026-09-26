@@ -166,14 +166,21 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/ecl-build.keychain-db"
           security list-keychains -d user -s "$RUNNER_TEMP/ecl-build.keychain-db" "$HOME/Library/Keychains/login.keychain-db"
       - name: Build and sign updater artifacts
-        run: npm run build -- --ci --config artifacts/release-config.json ${{ matrix.args }}
+        shell: bash
+        run: |
+          # Missing GitHub secrets become empty env values. Tauri treats an
+          # existing variable as configured, so leave absent credentials unset.
+          for credential in APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!credential}" ]; then unset "$credential"; fi
+          done
+          npm run build -- --ci --config artifacts/release-config.json ${{ matrix.args }}
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Ad-hoc app signing is a fallback; trusted public distribution needs Apple credentials.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          # The preceding step already imports an optional certificate into the
+          # runner keychain. Do not ask Tauri to import it a second time.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
