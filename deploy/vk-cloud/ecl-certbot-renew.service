@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew ECL HTTPS certificates (including short-lived IP certificates)
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ecl-certbot/bin/certbot renew --quiet --deploy-hook /usr/local/lib/ecl/reload-nginx.sh
+PrivateTmp=true
+NoNewPrivileges=true

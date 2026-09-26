@@ -1,0 +1,31 @@
+[Unit]
+Description=ECL transport application
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ecl-app
+Group=ecl-app
+WorkingDirectory=/opt/ecl/current/recovered
+EnvironmentFile=/etc/ecl/app.env
+ExecStart=/usr/bin/node /opt/ecl/current/recovered/apps/api/dist/main.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+CapabilityBoundingSet=
+ReadWritePaths=/var/lib/ecl/onboarding-photos
+
+[Install]
+WantedBy=multi-user.target

@@ -42,6 +42,15 @@ jobs:
       - name: Run unit tests
         run: npm test
 
+      - name: Verify production bootstrap with disposable PostgreSQL
+        run: node --test ../tests/production-bootstrap.test.cjs
+
+      - name: Verify managed PostgreSQL role migrations
+        run: node --test ../tests/external-role-migration.test.cjs
+
+      - name: Verify VK Cloud deployment safety checks
+        run: python3 -m unittest discover -s ../deploy/vk-cloud -p 'test_*.py' -v
+
       # The fixtures start disposable PostgreSQL 17 clusters on loopback with
       # synthetic data and credentials. No database service or secrets needed.
       - name: Run API integration tests
