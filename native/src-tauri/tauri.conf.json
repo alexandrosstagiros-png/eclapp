@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ECL",
+  "version": "0.1.4",
+  "identifier": "ru.ecl.workspace",
+  "build": {
+    "beforeDevCommand": "npm run prepare:web",
+    "beforeBuildCommand": "npm run prepare:web",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "create": false,
+        "useHttpsScheme": true,
+        "title": "ЕЦЛ · Единый центр логистики",
+        "width": 1360,
+        "height": 900,
+        "minWidth": 360,
+        "minHeight": 560,
+        "dragDropEnabled": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost blob:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: asset: http://asset.localhost https://asset.localhost; media-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Business",
+    "shortDescription": "Управление перевозками, командой и документами",
+    "longDescription": "ЕЦЛ — рабочее пространство сотрудников и водителей с подключением к серверу организации.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.3",
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist",
+      "signingIdentity": "-"
+    },
+    "iOS": {
+      "minimumSystemVersion": "15.4",
+      "infoPlist": "Info.plist"
+    },
+    "android": {
+      "minSdkVersion": 24
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCQTNEOTMzMjM5ODBDRUYKUldUdkRKZ2pNOW1qYTk1eXhJQ0Q0UWFJaG0xWmdBMWNlbFp5SmhqdzlaZXJaRlBVVWxjSlpMYlAK",
+      "endpoints": [
+        "https://github.com/alexandrosstagiros-png/eclapp/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      },
+      "requireSignedVersion": true
+    }
+  }
+}

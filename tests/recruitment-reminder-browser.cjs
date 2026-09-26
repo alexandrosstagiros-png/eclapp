@@ -57,7 +57,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await page.getByRole('heading', { name: 'Рекрутинг', exact: true }).waitFor();
       await page.getByRole('heading', { name: task.title, exact: true }).waitFor();
       assert.equal(await page.getByLabel('Проект и область ответственности', { exact: true }).count(), 0);
-      assert.equal(await page.getByLabel('Фильтр по проекту', { exact: true }).inputValue(), '');
+      assert.equal(await page.getByLabel('Фильтр по проекту', { exact: true }).count(), 0);
       assert.equal(await page.getByLabel('Рекрутер', { exact: true }).inputValue(), ids.dispatcher);
       assert.equal(await page.getByRole('navigation', { name: 'Разделы рекрутинга' }).getByRole('button', { name: 'Задачи', exact: true }).getAttribute('aria-pressed'), 'true');
       assert.equal(await page.getByRole('button', { name: 'Открытые', exact: true }).getAttribute('aria-pressed'), 'true');
@@ -113,4 +113,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await fixture.close();
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

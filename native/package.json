@@ -1,0 +1,24 @@
+{
+  "name": "ecl-native",
+  "version": "0.1.4",
+  "private": true,
+  "description": "ЕЦЛ — приложения для macOS, Windows, Android и iOS",
+  "type": "module",
+  "scripts": {
+    "prepare:web": "node scripts/prepare-web.cjs",
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "start:local": "node scripts/start-local.cjs",
+    "test": "node --test tests/*.test.cjs",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --workspace",
+    "test:api": "cargo build -p ecl-native-core --example api-smoke && node scripts/check-api.cjs",
+    "android:init": "node scripts/mobile.cjs android init",
+    "android:build": "node scripts/mobile.cjs android build",
+    "ios:init": "node scripts/mobile.cjs ios init",
+    "ios:build": "node scripts/mobile.cjs ios build"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.11.5"
+  }
+}

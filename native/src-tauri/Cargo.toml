@@ -1,0 +1,32 @@
+[package]
+name = "ecl-native"
+version = "0.1.4"
+description = "ЕЦЛ — единый центр логистики"
+edition = "2021"
+rust-version = "1.88"
+publish = false
+
+[lib]
+name = "ecl_native_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+ecl-native-core = { path = "../crates/ecl-native-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+url = "2"
+tokio = { version = "1", features = ["sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+semver = "1"
+minisign-verify = "0.2.5"
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2.12.0"

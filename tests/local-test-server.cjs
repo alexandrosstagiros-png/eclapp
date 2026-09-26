@@ -2,6 +2,9 @@
 
 // Disposable PostgreSQL + real API + same-origin static frontend for regression
 // tests and manual browser checks. This never reads a .env file or remote DB URL.
+// embedded-postgres installs a beforeExit hook that calls process.exit(0).
+// Browser CLI callers must await their finally/close cleanup and then call
+// process.exit(1) in the outer failure handler; exitCode alone is overwritten.
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const http = require("node:http");
@@ -102,7 +105,7 @@ async function createTestServer({ staffTeamActors = false, telegramOnboarding = 
       else if (!builtFrontend && /^\/assets\/recruitment(?:-model|-onboarding)?\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
       else if (!builtFrontend && url.pathname === "/assets/tenders.js") relative = "tenders.js";
       else if (!builtFrontend && url.pathname === "/assets/birthdays.js") relative = "birthdays.js";
-      else if (!builtFrontend && /^\/assets\/(?:attachment-photos|inspection-workflow|chief-mechanic-access|employee-planning-access)\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
+      else if (!builtFrontend && /^\/assets\/(?:company-work-request|attachment-photos|inspection-workflow|chief-mechanic-access|employee-planning-access)\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
       else if (!builtFrontend && url.pathname === "/assets/profile.js") relative = "profile.js";
       else if (!builtFrontend && url.pathname === "/assets/driver-requests.js") relative = "driver-requests.js";
       else if (!builtFrontend && url.pathname === "/assets/development.js") relative = "development.js";
@@ -199,5 +202,5 @@ async function main() {
     throw error;
   }
 }
-if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (require.main === module) main().catch(error => { console.error(error.message); process.exit(1); });
 module.exports = { createTestServer };

@@ -114,6 +114,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     const externalPage = await extContext.newPage();
     externalPage.on('pageerror', error => errors.push(error.message));
     await externalPage.goto(`${fixture.origin}/?section=recruitment`);
+    await externalPage.getByRole('navigation', { name: 'Разделы рекрутинга', exact: true }).getByRole('button', { name: 'Потребности', exact: true }).click();
     await externalPage.getByRole('heading', { name: unknown.title, exact: true }).waitFor();
     await externalPage.locator('.recruitment-request-card').filter({ has: externalPage.getByRole('heading', { name: unknown.title, exact: true }) }).getByRole('button', { name: 'Подробнее о потребности', exact: true }).click();
     assert.equal(await externalPage.locator('.recruitment-source-details').count(), 0);
@@ -124,4 +125,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await fixture.close();
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

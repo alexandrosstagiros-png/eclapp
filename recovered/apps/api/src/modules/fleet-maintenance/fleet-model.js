@@ -81,7 +81,7 @@ function prepare(rows, links) {
   const resolve = linkResolver(links), duplicateMap = new Map(), orders = new Map();
   const enriched = rows.map(row => {
     if (!row || !Number.isSafeInteger(row.amountCents)) fail('Сумма позиции должна быть целым числом копеек.');
-    const identity = resolve(row.plate);
+    const identity = row.companyVehicleIdentity || resolve(row.plate);
     const item = { ...row, vehicleKey: identity.key, canonicalPlate: identity.plate, issueCodes: [], issueMessages: {} };
     const issue = (code, message) => { item.issueCodes.push(code); item.issueMessages[code] = message; };
     if (!String(row.supplier || '').trim() && !(row.sourceOrigin === 'native' && row.executionConfirmed === 'internal')) issue('missing_supplier', 'Пустой подрядчик не подтверждает ремонт своими силами.');
@@ -104,7 +104,7 @@ function prepare(rows, links) {
     const duplicateKey = JSON.stringify(DUPLICATE_FIELDS.map(key => row[key] == null ? null : row[key]));
     if (!duplicateMap.has(duplicateKey)) duplicateMap.set(duplicateKey, []);
     duplicateMap.get(duplicateKey).push(item);
-    const orderKey = JSON.stringify([identity.key, String(row.orderId)]);
+    const orderKey = JSON.stringify([identity.key, String(row.companyOrderKey || row.orderId)]);
     if (!orders.has(orderKey)) orders.set(orderKey, { date: row.openedOn, odometer: row.odometerKm, identity: identity.key, items: [] });
     const order = orders.get(orderKey); order.items.push(item);
     // Conflicting readings within one document are not a chronological baseline.
@@ -170,7 +170,7 @@ function accumulate(entry, row) {
   entry.amountCents = add(entry.amountCents, row.amountCents);
   if (row.positionType === 'работа') entry.laborCents = add(entry.laborCents, row.amountCents);
   if (row.positionType === 'запчасть') entry.partsCents = add(entry.partsCents, row.amountCents);
-  entry.rowCount++; entry.orders.add(String(row.orderId)); entry.vehicles.add(row.vehicleKey);
+  entry.rowCount++; entry.orders.add(String(row.companyOrderKey || row.orderId)); entry.vehicles.add(row.vehicleKey);
 }
 function finish(entry) {
   const { orders, vehicles, ...result } = entry;

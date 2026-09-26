@@ -40,7 +40,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.goto(`${fixture.origin}/?section=recruitment&recruitmentTab=imports&recruitmentScope=${importScope}`);
     const tabs = page.getByRole('navigation', { name: 'Разделы рекрутинга' });
     await tabs.getByRole('button', { name: 'Кандидаты', exact: true }).waitFor();
-    assert.equal(await page.getByLabel('Фильтр по проекту', { exact: true }).inputValue(), '', 'Imported history opens across the company');
+    assert.equal(await page.getByLabel('Фильтр по проекту', { exact: true }).count(), 0, 'Imported history opens across the company');
     assert.equal(await tabs.getByRole('button', { name: 'Импорт Excel', exact: true }).getAttribute('aria-pressed'), 'true');
     const beforeImport = 0;
     await tabs.getByRole('button', { name: 'Импорт Excel', exact: true }).click();
@@ -101,4 +101,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ ok: true, checks: ['authorized deep link', '50-row pagination', 'server filters', 'no full snapshot', 'escaped source and formulas', 'archived candidate detail', 'read-only browsing', 'mobile width', 'staff-only tab'], out }));
   } finally { if (browser) await browser.close(); await fixture.close(); }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

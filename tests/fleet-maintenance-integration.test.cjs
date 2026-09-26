@@ -171,4 +171,29 @@ test('fleet snapshots enforce scope/finance, stage without activation, replace a
     const source = (await db.query('SELECT payload FROM fleet_maintenance_datasets WHERE id=$1', [roundTrip.dataset.id])).rows[0].payload;
     assert.ok(source.rows.every(row => row.ownWorkReported === true));
   });
+  await t.test('company analytics and exports retain every authorized source and exact write versions', async () => {
+    const staged = expect(await preview(bytes, admin.accessToken, peerScope, 'company-peer.xlsx'), 201);
+    expect(await commit(staged.dataset.id, 1, admin.accessToken, peerScope), 201);
+    const company = expect(await read(admin.accessToken, 'company'));
+    assert.equal(company.analytics.summary.rowCount, 208);
+    assert.equal(company.analytics.summary.amountCents, 413000);
+    assert.equal(company.analytics.summary.orderCount, 208);
+    assert.equal(company.activeDatasetIds.length, 2);
+    assert.equal(company.versionsByScope[ids.scope], 6);
+    assert.equal(company.versionsByScope[peerScope], 2);
+    const auditView = expect(await read(sessions.auditor.accessToken, 'company'));
+    assert.equal(auditView.analytics.summary.rowCount, 205);
+    const history = expect(await request('GET', base + '/imports?responsibilityScopeId=company', undefined, admin.accessToken));
+    assert.ok(history.items.some(item => item.id === staged.dataset.id && item.responsibilityScopeId === peerScope && item.version === 2));
+    const exported = await fetch(origin + '/api/v1' + base + '/export?responsibilityScopeId=company', { headers: { Authorization: 'Bearer ' + admin.accessToken } });
+    assert.equal(exported.status, 200);
+    assert.equal((await exported.text()).trim().split('\r\n').length, 209);
+    expect(await request('GET', base + '/reconciliation?responsibilityScopeId=company', undefined, admin.accessToken));
+    const report = await fetch(origin + '/api/v1' + base + '/report.pptx?responsibilityScopeId=company', { headers: { Authorization: 'Bearer ' + admin.accessToken } });
+    assert.equal(report.status, 200);
+    expect(await commit(staged.dataset.id, 2, admin.accessToken, 'company'), 400);
+    await db.query('UPDATE access_grants SET finance_visible=false WHERE user_id=$1 AND responsibility_scope_id=$2', [ids.admin, peerScope]);
+    assert.equal(expect(await read(admin.accessToken, 'company')).analytics.summary.rowCount, 205);
+  });
+
 });

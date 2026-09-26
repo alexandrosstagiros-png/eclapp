@@ -1,3 +1,4 @@
+import { createCompanyWorkRequest } from "./company-work-request.js";
 // Company conversations retain their source scope for storage and audit; the directory is shared.
 import { preparePhoto, createTeamMedia } from "./team-media.js";
 import { createTeamResponseMetrics } from "./team-response-metrics.js";
@@ -148,6 +149,10 @@ const normal = (value) =>
   String(value || "")
     .toLocaleLowerCase("ru")
     .trim();
+const retainChangedRows = (current, incoming) => {
+  const known = new Set(current.map((item) => item.id));
+  return [...current, ...incoming.filter((item) => !known.has(item.id))];
+};
 const mergeMessages = (before, after) => {
   const merged = new Map(before.map((item) => [item.id, item]));
   after.forEach((item) => {
@@ -1987,6 +1992,8 @@ export function createTeamWorkspace(
       mentionGeneration = useRef(0),
       knowledgeGeneration = useRef(0),
       listGeneration = useRef(0),
+      summaryGeneration = useRef(0),
+      scheduleGeneration = useRef(0),
       initialView = useRef({ initialTab, initialScopeId }),
       previousCredentials = useRef({ token, account: actor?.id });
     scopeRef.current = scopeId;
@@ -2049,6 +2056,10 @@ export function createTeamWorkspace(
         scopeId
       );
     };
+    const workScopesRef = useRef(workScopes);
+    workScopesRef.current = workScopes;
+    const companyWorkRequest = useRef(null);
+    if (!companyWorkRequest.current) companyWorkRequest.current = createCompanyWorkRequest(request, () => workScopesRef.current);
     const api = (path, options = {}) => {
       const method = options.method || "GET";
       const url = new URL(path, "http://team.local");
@@ -2070,7 +2081,7 @@ export function createTeamWorkspace(
         if (body?.responsibilityScopeId)
           body = { ...body, responsibilityScopeId: targetScope };
       }
-      return request(
+      return (/^\/team\/(summaries|schedules)(\/|$)/.test(url.pathname) ? companyWorkRequest.current : request)(
         `${url.pathname}${url.search}`,
         { ...options, ...(body ? { body: JSON.stringify(body) } : {}) },
         tokenRef.current,
@@ -2560,6 +2571,8 @@ export function createTeamWorkspace(
     async function loadLists(targetScope, signal, manage = canManage) {
       const account = accountRef.current,
         version = ++listGeneration.current,
+        summaryVersion = summaryGeneration.current,
+        scheduleVersion = scheduleGeneration.current,
         suffix = `?responsibilityScopeId=${encodeURIComponent(targetScope)}`;
       const results = await Promise.allSettled([
         api(`/team/people${suffix}`, { signal }),
@@ -2587,10 +2600,16 @@ export function createTeamWorkspace(
           applyKnowledge(value, manage);
         },
         (value) => {
-          setSummaries(value.summaries || []);
+          setSummaries((items) => summaryVersion === summaryGeneration.current
+            ? value.summaries || []
+            : retainChangedRows(items, value.summaries || []));
           setSummaryId((id) => id || value.summaries?.[0]?.id || "");
         },
-        (value) => setSchedules(value.schedules || []),
+        (value) => {
+          setSchedules((items) => scheduleVersion === scheduleGeneration.current
+            ? value.schedules || []
+            : retainChangedRows(items, value.schedules || []));
+        },
         (value) => {
           mentionGeneration.current++;
           setMentionInbox(visibleMentionInbox(value));
@@ -6642,47 +6661,6 @@ export function createTeamWorkspace(
                     { disabled: Boolean(busy) },
                   ),
                 ),
-                !articleForm.version &&
-                  workScopes.filter(
-                    (scope) =>
-                      knowledgeAccess.permissionsByScope?.[
-                        scope.responsibilityScopeId
-                      ]?.canCreate,
-                  ).length > 1 &&
-                  field(
-                    "Проект",
-                    h(
-                      "select",
-                      {
-                        value: articleForm.responsibilityScopeId,
-                        disabled: Boolean(busy),
-                        onChange: (event) =>
-                          setArticleForm((value) => ({
-                            ...value,
-                            responsibilityScopeId: event.target.value,
-                            audiencePositionIds: [],
-                            audiencePositions: [],
-                          })),
-                      },
-                      ...workScopes
-                        .filter(
-                          (scope) =>
-                            knowledgeAccess.permissionsByScope?.[
-                              scope.responsibilityScopeId
-                            ]?.canCreate,
-                        )
-                        .map((scope) =>
-                          h(
-                            "option",
-                            {
-                              key: scope.responsibilityScopeId,
-                              value: scope.responsibilityScopeId,
-                            },
-                            scopeLabel(scope),
-                          ),
-                        ),
-                    ),
-                  ),
                 articleForm.version > 0 && articleMetadata(articleForm),
                 articleStructured &&
                   articleAutoFields(articleForm, {
@@ -7278,7 +7256,8 @@ export function createTeamWorkspace(
           }),
         (result) => {
           const report = result.summary || result;
-          listGeneration.current++;
+          // Invalidate only this list: initial people and chats still need to load.
+          summaryGeneration.current++;
           setSummaries((items) => [
             report,
             ...items.filter((item) => item.id !== report.id),
@@ -7304,7 +7283,7 @@ export function createTeamWorkspace(
           }),
         (result) => {
           const report = result.summary || result;
-          listGeneration.current++;
+          summaryGeneration.current++;
           setSummaries((items) =>
             items.map((item) => (item.id === report.id ? report : item)),
           );
@@ -7429,6 +7408,7 @@ export function createTeamWorkspace(
                         () =>
                           setSharing({
                             id: summary.id,
+                            responsibilityScopeId: summary.responsibilityScopeId,
                             recipientIds: [...(summary.recipientIds || [])],
                           }),
                         { disabled: Boolean(busy) },
@@ -7532,7 +7512,7 @@ export function createTeamWorkspace(
                       { className: "team-sharing", onSubmit: saveSharing },
                       h(RecipientPicker, {
                         people: people.filter((person) =>
-                          person.workResponsibilityScopeIds?.includes(scopeId),
+                          person.workResponsibilityScopeIds?.includes(sharing.responsibilityScopeId || scopeId),
                         ),
                         selected: sharing.recipientIds,
                         onChange: (ids) =>
@@ -7612,7 +7592,7 @@ export function createTeamWorkspace(
           }),
         (result) => {
           const schedule = result.schedule || result;
-          listGeneration.current++;
+          scheduleGeneration.current++;
           setSchedules((items) => [
             schedule,
             ...items.filter((item) => item.id !== schedule.id),
@@ -7746,7 +7726,7 @@ export function createTeamWorkspace(
             ),
             h(RecipientPicker, {
               people: people.filter((person) =>
-                person.workResponsibilityScopeIds?.includes(scopeId),
+                person.workResponsibilityScopeIds?.includes(scheduleForm.responsibilityScopeId || scopeId),
               ),
               selected: scheduleForm.recipientIds,
               onChange: (ids) =>
@@ -7925,44 +7905,6 @@ export function createTeamWorkspace(
                   loading ? "Загрузка…" : `${people.length} сотрудников`,
                 ),
               ),
-              [
-                "tasks",
-                "outcomes",
-                "drivers",
-                "summaries",
-                "schedules",
-              ].includes(tab) &&
-                workScopes.length > 1 &&
-                h(
-                  "div",
-                  { className: "team-work-project" },
-                  field(
-                    "Проект",
-                    h(
-                      "select",
-                      {
-                        value: scopeId,
-                        disabled: Boolean(busy),
-                        onChange: (event) => chooseScope(event.target.value),
-                      },
-                      ...workScopes.map((scope) =>
-                        h(
-                          "option",
-                          {
-                            key: scope.responsibilityScopeId,
-                            value: scope.responsibilityScopeId,
-                          },
-                          scopeLabel(scope),
-                        ),
-                      ),
-                    ),
-                  ),
-                  h(
-                    "p",
-                    { className: "team-muted" },
-                    "Фильтр данных этого раздела. Общение и сотрудники доступны во всей компании.",
-                  ),
-                ),
               tab === "chat" && chatView(),
               tab === "mentions" && mentionsView(),
               tab === "tasks" &&
@@ -7972,6 +7914,7 @@ export function createTeamWorkspace(
                   token,
                   actor,
                   scopeId,
+                  scopes: workScopes,
                   onExpired,
                   onDirtyChange: setTasksDirty,
                   initialTaskId: taskOpen?.id,
@@ -7994,6 +7937,7 @@ export function createTeamWorkspace(
                   token,
                   actor,
                   scopeId,
+                  scopes: workScopes,
                   onExpired,
                   onDirtyChange: setOutcomesDirty,
                   onRecognitionChange: () =>
@@ -8006,6 +7950,7 @@ export function createTeamWorkspace(
                   token,
                   actor,
                   scopeId,
+                  scopes: workScopes,
                   scopeName: scopeLabel(
                     scopes.find(
                       (scope) => scope.responsibilityScopeId === scopeId,

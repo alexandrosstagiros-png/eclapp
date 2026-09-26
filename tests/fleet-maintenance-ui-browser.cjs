@@ -106,7 +106,7 @@ async function workbook(count = 205, amount = 20) {
       auditorId = randomUUID();
     await fixture.adminPool.query(
       "INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)",
-      [peer, fixture.ids.project, "Пустая область теста"],
+      [peer, fixture.ids.project, "Я — пустая область теста"],
     );
     await fixture.adminPool.query(
       "INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,finance_visible) VALUES($1,$2,$3,$4,$5,true)",
@@ -192,9 +192,7 @@ async function workbook(count = 205, amount = 20) {
       route.fulfill({ contentType: "text/javascript", body: bundle }),
     );
     await page.goto(`${fixture.origin}/fleet-ui-test`);
-    await page
-      .getByLabel("Проект", { exact: true })
-      .selectOption(fixture.ids.scope);
+    assert.equal(await page.getByLabel("Проект", { exact: true }).count(), 0);
     await page
       .getByRole("heading", { name: "Добавьте первый источник" })
       .waitFor();
@@ -417,7 +415,7 @@ async function workbook(count = 205, amount = 20) {
     await page.route(`**/api/v1/fleet-maintenance?**`, async (route) => {
       const url = new URL(route.request().url());
       if (
-        url.searchParams.get("responsibilityScopeId") === fixture.ids.scope &&
+        url.searchParams.get("responsibilityScopeId") === "company" &&
         url.searchParams.get("search") === "Позиция"
       ) {
         const response = await route.fetch();
@@ -428,16 +426,14 @@ async function workbook(count = 205, amount = 20) {
     });
     await page.getByLabel("Поиск позиции", { exact: true }).fill("Позиция");
     await intercepted;
-    await page
-      .getByLabel("Проект", { exact: true })
-      .selectOption(peer);
-    await page
-      .getByRole("heading", { name: "Добавьте первый источник" })
-      .waitFor();
+    await page.getByLabel("Период с", { exact: true }).fill("2027-01-01");
+    await page.getByLabel("Период по", { exact: true }).fill("2026-01-01");
     release();
     await page.waitForTimeout(500);
     assert.equal(await page.locator(".fleet-kpi.is-primary").count(), 0);
-    console.log("PASS late response cannot restore a previous scope");
+    console.log("PASS late response cannot restore totals for stale filters");
+    await page.getByRole("button", { name: "Сбросить фильтры", exact: true }).click();
+    await page.locator(".fleet-kpi.is-primary").waitFor();
 
     await page
       .getByRole("navigation", { name: "Разделы обслуживания" })
@@ -509,14 +505,11 @@ async function workbook(count = 205, amount = 20) {
       .getByRole("button", { name: "Обзор", exact: true })
       .click();
     await page.locator(".fleet-kpi.is-primary").waitFor();
-    assert.match(
-      (await page.locator(".fleet-kpi.is-primary").innerText()).replace(
-        /\s/g,
-        "",
-      ),
-      /1234,50/,
-    );
-    await page.getByText("Заказ-наряды ЕЦЛ", { exact: true }).waitFor();
+    const companyState = await fixture.request("GET", "/fleet-maintenance?responsibilityScopeId=company", undefined, admin.accessToken);
+    const formattedTotal = new Intl.NumberFormat('ru-RU', {style: 'currency', currency: 'RUB', maximumFractionDigits: 2}).format(companyState.body.analytics.summary.amountCents / 100).replace(/\s/g, '');
+    assert.ok((await page.locator(".fleet-kpi.is-primary").innerText()).replace(/\s/g, '').includes(formattedTotal));
+    assert.equal(companyState.body.nativeRowCount, 1);
+    assert.equal(await page.getByLabel("Проект", { exact: true }).count(), 0);
     const nativeState = await fixture.request(
       "GET",
       `/fleet-maintenance?responsibilityScopeId=${peer}`,
@@ -526,7 +519,7 @@ async function workbook(count = 205, amount = 20) {
     assert.equal(nativeState.body.dataset, null);
     assert.equal(nativeState.body.nativeRowCount, 1);
     console.log(
-      "PASS native-only dataset=null renders; returning from operations refreshes analysis after a new completed order",
+      "PASS native records from another scope join imported analytics without a project selector",
     );
 
     await page.evaluate((session) => window.mountFleet(session), auditor);
@@ -561,5 +554,5 @@ async function workbook(count = 205, amount = 20) {
   }
 })().catch((error) => {
   console.error(error);
-  process.exitCode = 1;
+  process.exit(1);
 });

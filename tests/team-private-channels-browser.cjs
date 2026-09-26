@@ -89,4 +89,4 @@ const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
     assert.deepEqual(errors,[]);
     console.log('PASS private channels browser: administrator-selected membership, hidden from others, administrator oversight, change members with cache revocation, public/private conversion, reload, five-minute mode, mobile');
   }finally{if(browser)await browser.close();await f.close();}
-})().catch(err=>{console.error(err.stack||err.message);process.exitCode=1;});
+})().catch(err=>{console.error(err.stack||err.message);process.exit(1);});

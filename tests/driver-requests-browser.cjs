@@ -27,7 +27,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal((await request('GET','/team/context',undefined,driver.accessToken)).status,403);
     await dp.getByRole('button',{name:'Новое обращение',exact:true}).click();
     const form=dp.getByRole('form',{name:'Новое обращение',exact:true});
-    assert.ok((await form.getByLabel('Проект',{exact:true}).locator('option:checked').textContent()).trim().length>3);
+    assert.equal(await form.getByLabel('Проект',{exact:true}).count(),0);
     await form.getByLabel('Отдел',{exact:true}).selectOption('transport');
     await form.getByLabel('Тема обращения',{exact:true}).fill('Осмотр перед следующим рейсом');
     await form.getByLabel('Текст обращения',{exact:true}).fill('Нужна проверка давления в шинах до выезда.');
@@ -113,14 +113,23 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await ap.locator('.driver-request-item').filter({hasText:ticket.subject}).click();
     await ap.getByRole('log').getByText('Проверка закончена, можно выезжать.',{exact:true}).waitFor();
     await f.adminPool.query('UPDATE access_grants SET personal_data_visible=false WHERE user_id=$1',[ids.admin]);
+    const revokedQueue=ap.waitForResponse(async response=>{
+      const url=new URL(response.url());
+      return response.status()===200 && url.pathname==='/api/v1/communications/driver-requests'
+        && url.searchParams.get('responsibilityScopeId')===ticket.scope.responsibilityScopeId
+        && (await response.json()).items.length===0;
+    },{timeout:25000});
     await ap.bringToFront();await ap.getByRole('log').waitFor({state:'detached',timeout:25000});
+    // The thread can lose access before the separately scheduled queue refresh finishes.
+    await revokedQueue;
+    await ap.waitForFunction(()=>document.querySelectorAll('.driver-request-item').length===0,{},{timeout:25000});
     assert.equal(await ap.locator('.driver-request-item').count(),0);
-    const selectedScope=await ap.getByLabel('Проект',{exact:true}).locator('option:checked').textContent();
+    assert.equal(await ap.getByLabel('Проект',{exact:true}).count(),0);
     const emptyQueue=await ap.locator('.driver-request-list').innerText();
-    assert.ok(emptyQueue.includes(selectedScope),'Empty queue names the current workspace');
+    assert.ok(!emptyQueue.includes('выбранную область'),'Empty queue describes the unified workspace');
     assert.ok(emptyQueue.includes('из учётных записей водителей'));
     assert.ok(emptyQueue.includes('через раздел «Сотрудники»'));
     assert.deepEqual(errors,[]);
-    console.log('PASS driver requests browser: creation, scoped staff queue, manual refresh preserves draft and selection, scoped empty state, bidirectional polling, draft and idempotent retry, resolve/reopen, persistence, driver Team denial, no Telegram deliveries, mobile');
+    console.log('PASS driver requests browser: creation, scoped staff queue, manual refresh preserves draft and selection, unified empty state, bidirectional polling, draft and idempotent retry, resolve/reopen, persistence, driver Team denial, no Telegram deliveries, mobile');
   } finally {if(browser)await browser.close();await f.close();}
-})().catch(err=>{console.error(err.stack||err.message);process.exitCode=1;});
+})().catch(err=>{console.error(err.stack||err.message);process.exit(1);});

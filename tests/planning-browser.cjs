@@ -99,4 +99,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ managerPasswordLogin: 'passed', clientTemplate: 'appia', persistedReload: 'passed', metroSections: 2, csv: 'passed', clipboard: 'passed', conflictPreservesDraft: 'passed', revokedExport: 'blocked', mobileOverflow: false, javascriptErrors: 0, screenshots: out }));
   } finally { if (browser) await browser.close(); await f.close(); }
-})().catch(error => { console.error(error.stack); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack); process.exit(1); });

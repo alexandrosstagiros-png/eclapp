@@ -65,12 +65,10 @@ const date = (value, time = false) => {
           : { day: "2-digit", month: "short", year: "numeric" },
       ).format(parsed);
 };
-const scopeLabel = (scope) =>
-  [scope.projectName, scope.regionName, scope.scopeName]
-    .filter(Boolean)
-    .join(" · ") || scope.responsibilityScopeId;
+const normalizePlate = (value) => String(value || "").normalize("NFKC").trim().toLowerCase().replace(/[\s\-]/g, "")
+  .replace(/[abekmhopctyx]/g, letter => ({ a: "а", b: "в", e: "е", k: "к", m: "м", h: "н", o: "о", p: "р", c: "с", t: "т", y: "у", x: "х" })[letter]);
 const queryFor = (scopeId, filters = {}, exportAll = false) => {
-  const query = new URLSearchParams({ responsibilityScopeId: scopeId });
+  const query = new URLSearchParams({ responsibilityScopeId: "company" });
   for (const [key, value] of Object.entries(filters))
     if (
       value !== "" &&
@@ -746,7 +744,7 @@ export function createFleetMaintenanceWorkspace(
       reason?.status === 401
         ? "Сессия завершена. Войдите снова."
         : reason?.status === 403
-          ? "Доступ к финансовым данным этой области закрыт. Обновите доступные области."
+          ? "Доступ к финансовым данным изменился. Обновите страницу."
           : reason?.status === 409
             ? "Данные изменены другим сотрудником. Загрузите актуальное состояние и повторно проверьте действие."
             : reason?.message ||
@@ -848,7 +846,7 @@ export function createFleetMaintenanceWorkspace(
           if (!Array.isArray(result?.scopes))
             throw new Error("Сервер не вернул список доступных областей.");
           setScopes(result.scopes);
-          chooseScope(result.scopes[0]?.responsibilityScopeId || "");
+          chooseScope(result.defaultResponsibilityScopeId || result.scopes[0]?.responsibilityScopeId || "");
         })
         .catch((reason) => {
           if (!controller.signal.aborted) {
@@ -1020,10 +1018,10 @@ export function createFleetMaintenanceWorkspace(
         !canWrite ||
         !choice?.dataset?.id ||
         mutationRef.current ||
-        choice.responsibilityScopeId !== scopeId
+        !scopes.some(value => value.responsibilityScopeId === choice.responsibilityScopeId && value.canWrite)
       )
         return;
-      const target = scopeId;
+      const target = choice.responsibilityScopeId, workspaceTarget = scopeId;
       mutationRef.current = true;
       setBusy("commit");
       setImportError("");
@@ -1041,7 +1039,7 @@ export function createFleetMaintenanceWorkspace(
           },
           token,
         );
-        if (!current(target)) return;
+        if (!current(workspaceTarget)) return;
         setPreview(null);
         setActivation(null);
         setFile(null);
@@ -1054,7 +1052,7 @@ export function createFleetMaintenanceWorkspace(
         );
         setReload((value) => value + 1);
       } catch (reason) {
-        if (!current(target)) return;
+        if (!current(workspaceTarget)) return;
         handleAccess(reason);
         setImportError(failMessage(reason));
         setError(failMessage(reason));
@@ -1082,12 +1080,13 @@ export function createFleetMaintenanceWorkspace(
         );
         return;
       }
-      const target = scopeId;
+      const targets = link.responsibilityScopeId ? [link.responsibilityScopeId] : data.scopeIdsByPlate?.[normalizePlate(link.plate)] || [scopeId];
+      const workspaceTarget = scopeId;
       mutationRef.current = true;
       setBusy("link");
       setLinkError("");
       try {
-        await request(
+        for (const target of targets) await request(
           `${API}/vehicle-links`,
           {
             method: "PUT",
@@ -1097,12 +1096,12 @@ export function createFleetMaintenanceWorkspace(
               vehicleKey: link.unlink ? "" : link.vehicleKey.trim(),
               canonicalPlate: link.unlink ? "" : link.canonicalPlate.trim(),
               reason: link.reason.trim(),
-              expectedVersion: data.version,
+              expectedVersion: data.versionsByScope?.[target] ?? data.version,
             }),
           },
           token,
         );
-        if (!current(target)) return;
+        if (!current(workspaceTarget)) return;
         setLink(emptyLink());
         setData(null);
         setNotice(
@@ -1112,13 +1111,11 @@ export function createFleetMaintenanceWorkspace(
         );
         setReload((value) => value + 1);
       } catch (reason) {
-        if (current(target)) {
+        if (current(workspaceTarget)) {
           handleAccess(reason);
           setLinkError(failMessage(reason));
-          if (reason?.status === 409) {
-            setLink((previous) => ({ ...previous, confirmed: false }));
-            setReload((value) => value + 1);
-          }
+          setLink((previous) => ({ ...previous, confirmed: false }));
+          setReload((value) => value + 1);
         }
       } finally {
         mutationRef.current = false;
@@ -1517,7 +1514,7 @@ export function createFleetMaintenanceWorkspace(
                 ...data.links.map((item) =>
                   h(
                     "tr",
-                    { key: item.plate },
+                    { key: `${item.responsibilityScopeId}:${item.plate}` },
                     h("td", null, item.plate),
                     h("td", null, item.vehicleKey),
                     h("td", null, item.canonicalPlate),
@@ -1839,7 +1836,7 @@ export function createFleetMaintenanceWorkspace(
                   { className: "fleet-history" },
                   ...history.items.map((item) => {
                     const dataset = item.dataset || item,
-                      isActive = dataset.id === data?.dataset?.id;
+                      isActive = (data?.activeDatasetIds || [data?.dataset?.id]).includes(dataset.id);
                     return h(
                       "article",
                       {
@@ -1872,8 +1869,8 @@ export function createFleetMaintenanceWorkspace(
                             () => {
                               setActivation({
                                 dataset,
-                                version: data?.version,
-                                responsibilityScopeId: scopeId,
+                                version: item.version ?? data?.version,
+                                responsibilityScopeId: item.responsibilityScopeId || scopeId,
                               });
                               setImportError("");
                             },
@@ -1909,7 +1906,7 @@ export function createFleetMaintenanceWorkspace(
           h(
             "p",
             null,
-            "Затраты, исходные позиции и качество данных в одной области ответственности.",
+            "Затраты, исходные позиции и качество данных автопарка.",
           ),
         ),
         h(
@@ -1963,27 +1960,6 @@ export function createFleetMaintenanceWorkspace(
                 h(
                   "section",
                   { className: "fleet-scope" },
-                  field(
-                    "Проект",
-                    h(
-                      "select",
-                      {
-                        value: scopeId,
-                        onChange: (event) => chooseScope(event.target.value),
-                        disabled: Boolean(busy) || operationsDirty,
-                      },
-                      ...scopes.map((scope) =>
-                        h(
-                          "option",
-                          {
-                            key: scope.responsibilityScopeId,
-                            value: scope.responsibilityScopeId,
-                          },
-                          scopeLabel(scope),
-                        ),
-                      ),
-                    ),
-                  ),
                   h(
                     "div",
                     { className: "fleet-source" },
@@ -2051,7 +2027,7 @@ export function createFleetMaintenanceWorkspace(
                   h(
                     "p",
                     { className: "fleet-note" },
-                    "Завершите или отмените изменения в текущем разделе, чтобы сменить область или вкладку.",
+                    "Завершите или отмените изменения в текущем разделе, чтобы сменить вкладку.",
                   ),
                 operational && OperationsWorkspace
                   ? h(OperationsWorkspace, {
@@ -2061,6 +2037,8 @@ export function createFleetMaintenanceWorkspace(
                       onExpired,
                       onDirtyChange: setOperationsDirty,
                       responsibilityScopeId: scopeId,
+                      scopes,
+                      importScopeIds: data?.activeDatasetScopeIds || [],
                       scope: currentScope,
                       canWrite,
                     })
@@ -2402,7 +2380,7 @@ export function createFleetMaintenanceWorkspace(
                   ? "Этот файл уже активен. Повторная активация не добавит строки."
                   : data?.dataset
                     ? `Активный файл «${data.dataset.fileName}» будет заменён. Он останется в истории загрузок.`
-                    : "Этот файл станет первым активным источником области.",
+                    : "Этот файл станет первым активным источником.",
               ),
               button(
                 busy === "commit"

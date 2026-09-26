@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Native tenders workspace. All customers, cards and history come from the API.
+import { scheduleCompanyRead } from './company-work-request.js';
 const STAGES = [['planned', 'Запланировано'], ['in_progress', 'В работе'], ['awaiting_decision', 'Ждём решения'], ['won', 'Выиграно'], ['closed', 'Закрыто']];
 const DELIVERY = [['', 'Не уточнён'], ['city', 'Городская'], ['crew', 'Экипажная']];
 const KINDS = [['tender', 'Тендер'], ['negotiation', 'Переговоры'], ['expansion', 'Расширение проекта']];
@@ -7,12 +8,12 @@ const TABLE_COLUMNS = [['customer', 'Заказчик / тендер'], ['status
 const DEFAULT_COLUMNS = ['customer', 'status', 'vehicleCount', 'requirements', 'lastComment', 'deliveryType', 'expectedLaunch'];
 const preferencesKey = (actorId) => actorId ? `office:tenders:view:v1:${encodeURIComponent(actorId)}` : null;
 const readPreferences = (actorId) => {
-  const defaults = { ownerId: actorId || '', view: 'board', columns: [...DEFAULT_COLUMNS], scopeId: '', storageError: false };
+  const defaults = { ownerId: actorId || '', view: 'board', columns: [...DEFAULT_COLUMNS], storageError: false };
   if (!actorId || typeof window === 'undefined') return defaults;
   try {
     const saved = JSON.parse(window.localStorage.getItem(preferencesKey(actorId)) || 'null');
     if (saved?.version !== 1 || !Array.isArray(saved.columns)) return defaults;
-    return { ...defaults, view: saved.view === 'table' ? 'table' : 'board', columns: TABLE_COLUMNS.filter(([id]) => id === 'customer' || saved.columns.includes(id)).map(([id]) => id), scopeId: typeof saved.scopeId === 'string' && saved.scopeId.length <= 100 ? saved.scopeId : '' };
+    return { ...defaults, view: saved.view === 'table' ? 'table' : 'board', columns: TABLE_COLUMNS.filter(([id]) => id === 'customer' || saved.columns.includes(id)).map(([id]) => id) };
   } catch { return { ...defaults, storageError: true }; }
 };
 const FIELDS = {
@@ -28,14 +29,22 @@ const dateLabel = (value, time = false) => {
   return Number.isNaN(date.getTime()) ? 'Дата не распознана' : new Intl.DateTimeFormat('ru-RU', time ? { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' } : { day: 'numeric', month: 'short', year: 'numeric' }).format(date);
 };
 const localToday = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; };
-const scopeLabel = (scope) => [scope.projectName, scope.regionName, scope.scopeName].filter(Boolean).join(' · ') || 'Проект';
 const normalized = (value) => String(value || '').toLocaleLowerCase('ru').trim();
 // Preserve the API's database order when timestamps collapse to the same millisecond.
 const sortEvents = (events) => [...events].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
 const serializeItem = (item) => Object.fromEntries(['id', 'responsibilityScopeId', 'version', ...Object.keys(FIELDS)].map((key) => [key, item[key]]));
 const newItem = (scopeId) => ({ id: crypto.randomUUID(), responsibilityScopeId: scopeId, version: 0, customerId: '', title: '', status: 'planned', vehicleCount: '', requirements: '', deliveryType: '', expectedLaunch: null, launchNotes: '', submissionDeadline: null, nextStep: '', nextStepDue: null, kind: 'tender', closeReason: '', winReason: '' });
 
-export function createTendersWorkspace(React, { request }) {
+// Keep new work with the populated operational data, not an empty technical grant.
+const preferredCreationScope = (scopes, records) => {
+  const counts = new Map(scopes.map(scope => [scope.responsibilityScopeId, 0]));
+  for (const record of records) if (counts.has(record.responsibilityScopeId)) counts.set(record.responsibilityScopeId, counts.get(record.responsibilityScopeId) + 1);
+  return scopes.reduce((best, scope) => !best || counts.get(scope.responsibilityScopeId) > counts.get(best.responsibilityScopeId) ? scope : best, null)?.responsibilityScopeId || '';
+};
+
+export function createTendersWorkspace(React, { request: rawRequest }) {
+  const request = (path, options = {}, token) => (options.method || 'GET') === 'GET'
+    ? scheduleCompanyRead(rawRequest, path, options, token) : rawRequest(path, options, token);
   const { createElement: h, useState, useEffect, useMemo, useRef } = React;
   const button = (label, onClick, props = {}) => h('button', { type: 'button', className: 'button', onClick, ...props }, label);
   const field = (label, input, hint, wide = false) => h('label', { className: `tenders-field${wide ? ' is-wide' : ''}` }, h('span', null, label), React.cloneElement(input, { 'aria-label': input.props['aria-label'] || label }), hint && h('small', null, hint));
@@ -70,14 +79,13 @@ export function createTendersWorkspace(React, { request }) {
     const [query, setQuery] = useState(''), [selectedId, setSelectedId] = useState(null), [historyMode, setHistoryMode] = useState('tender');
     const [form, setForm] = useState(null), [formError, setFormError] = useState(''), [conflict, setConflict] = useState(null), [busy, setBusy] = useState('');
     const [comments, setComments] = useState({}), [commentErrors, setCommentErrors] = useState({});
-    const alive = useRef(true), busyRef = useRef(false), scopeRef = useRef(scopeId), callbacks = useRef({ onExpired, onDirtyChange }), loadGeneration = useRef(0), dataRef = useRef(data), columnsButton = useRef(null), deepLink = useRef({ ownerId: actor?.id || '', applied: false });
+    const alive = useRef(true), busyRef = useRef(false), scopeRef = useRef(scopeId), callbacks = useRef({ onExpired, onDirtyChange }), loadGeneration = useRef(0), dataRef = useRef(data), columnsButton = useRef(null);
     callbacks.current = { onExpired, onDirtyChange }; scopeRef.current = scopeId; dataRef.current = data;
     const formDirty = Boolean(form && (form.mode !== 'edit' ? Object.keys(FIELDS).some((key) => form.value[key] !== form.original[key]) || form.customerName.trim() : Object.keys(FIELDS).some((key) => form.value[key] !== form.original[key])));
     const dirty = formDirty || Object.values(comments).some((draft) => draft.text.trim());
     const customerName = (id, source = data) => source.customers.find((customer) => customer.id === id)?.name || 'Заказчик недоступен';
     const selected = data.tenders.find((item) => item.id === selectedId);
-    const currentScope = scopes.find((scope) => scope.responsibilityScopeId === scopeId);
-    const failMessage = (reason) => reason?.status === 401 ? 'Сессия завершена. Войдите снова.' : reason?.status === 403 ? 'Доступ к тендерам этой области закрыт. Обратитесь к администратору.' : reason?.message || 'Не удалось выполнить действие. Проверьте соединение и попробуйте снова.';
+    const failMessage = (reason) => reason?.status === 401 ? 'Сессия завершена. Войдите снова.' : reason?.status === 403 ? 'Доступ к тендерам закрыт. Обратитесь к администратору.' : reason?.message || 'Не удалось выполнить действие. Проверьте соединение и попробуйте снова.';
     const expire = (reason) => { if (reason?.status === 401) callbacks.current.onExpired?.(); };
     const currentPreferences = preferences.ownerId === (actor?.id || '') ? preferences : readPreferences(actor?.id);
     const view = currentPreferences.view, visibleColumns = TABLE_COLUMNS.filter(([id]) => currentPreferences.columns.includes(id));
@@ -90,7 +98,7 @@ export function createTendersWorkspace(React, { request }) {
     useEffect(() => {
       if (!actor?.id || preferences.ownerId !== actor.id) return;
       try {
-        window.localStorage.setItem(preferencesKey(actor.id), JSON.stringify({ version: 1, view: preferences.view, columns: preferences.columns, scopeId: preferences.scopeId }));
+        window.localStorage.setItem(preferencesKey(actor.id), JSON.stringify({ version: 1, view: preferences.view, columns: preferences.columns }));
         if (preferences.storageError) setPreferences((current) => ({ ...current, storageError: false }));
       }
       catch { if (!preferences.storageError) setPreferences((current) => ({ ...current, storageError: true })); }
@@ -103,28 +111,24 @@ export function createTendersWorkspace(React, { request }) {
     }, [dirty]);
     useEffect(() => {
       const controller = new AbortController();
-      const ownerId = actor?.id || '';
-      if (deepLink.current.ownerId !== ownerId) deepLink.current = { ownerId, applied: false };
-      const requestedScope = !deepLink.current.applied ? new URLSearchParams(window.location.search).get('responsibilityScopeId') : null;
-      const preferredScope = currentPreferences.scopeId;
       setContextLoading(true); setContextError(''); setScopes([]); setScopeId(''); setData(emptyData()); setLoaded(false); setError('');
       setForm(null); setConflict(null); setFormError(''); setComments({}); setCommentErrors({}); setSelectedId(null); setCommentingId(null); setNotice('');
       request('/tenders/context', { signal: controller.signal }, token).then((result) => {
         if (controller.signal.aborted) return;
         if (!Array.isArray(result?.scopes)) throw new Error('Сервер не вернул список доступных областей. Повторите загрузку.');
-        const available = (id) => id && result.scopes.some((scope) => scope.responsibilityScopeId === id);
-        const nextScope = available(requestedScope) ? requestedScope : available(preferredScope) ? preferredScope : result.scopes[0]?.responsibilityScopeId || '';
-        deepLink.current.applied = true;
-        setScopes(result.scopes); setScopeId(nextScope);
-        setPreferences((current) => ({ ...(current.ownerId === ownerId ? current : readPreferences(actor?.id)), scopeId: nextScope }));
+        setScopes(result.scopes); setScopeId(result.scopes[0]?.responsibilityScopeId || '');
       }).catch((reason) => { if (!controller.signal.aborted) { setContextError(failMessage(reason)); expire(reason); } }).finally(() => { if (!controller.signal.aborted) setContextLoading(false); });
       return () => controller.abort();
     }, [token, contextKey, actor?.id]);
 
     async function loadData(targetScope, signal) {
       const generation = ++loadGeneration.current;
-      const result = await request(`/tenders?responsibilityScopeId=${encodeURIComponent(targetScope)}`, { signal }, token);
-      if (!Array.isArray(result?.customers) || !Array.isArray(result?.tenders) || !Array.isArray(result?.events)) throw new Error('Сервер вернул неполные данные тендеров. Повторите загрузку.');
+      const results = await Promise.all(scopes.map(async (scope) => {
+        const result = await request(`/tenders?responsibilityScopeId=${encodeURIComponent(scope.responsibilityScopeId)}`, { signal }, token);
+        if (!Array.isArray(result?.customers) || !Array.isArray(result?.tenders) || !Array.isArray(result?.events)) throw new Error('Сервер вернул неполные данные тендеров. Повторите загрузку.');
+        return result;
+      }));
+      const result = Object.fromEntries(['customers', 'tenders', 'events'].map((key) => [key, [...new Map(results.flatMap((value) => value[key]).map((item) => [item.id, item])).values()]]));
       if (alive.current && !signal?.aborted && generation === loadGeneration.current && scopeRef.current === targetScope) { setData(result); dataRef.current = result; setLoaded(true); }
       return result;
     }
@@ -144,19 +148,13 @@ export function createTendersWorkspace(React, { request }) {
     async function refreshAfterSave(targetScope) {
       try { await loadData(targetScope); } catch (reason) { if (alive.current && scopeRef.current === targetScope) { setError(`Изменение сохранено, но не удалось обновить доску и историю. ${failMessage(reason)}`); expire(reason); } }
     }
-    const chooseScope = (next) => {
-      if (busyRef.current || next === scopeId) return;
-      if (dirty && !window.confirm('Есть несохранённые изменения и комментарии. Сменить область и удалить эти черновики?')) return;
-      setScopeId(next); setForm(null); setConflict(null); setFormError(''); setComments({}); setCommentErrors({}); setSelectedId(null); setCommentingId(null); setQuery('');
-      setPreferences((current) => ({ ...current, scopeId: next }));
-    };
     const closeForm = () => {
       if (busyRef.current) return;
       if (formDirty && !window.confirm('Закрыть окно и удалить несохранённый черновик?')) return;
       setForm(null); setFormError(''); setConflict(null);
     };
     const openForm = (item) => {
-      const value = item ? serializeItem(item) : newItem(scopeId);
+      const value = item ? serializeItem(item) : newItem(preferredCreationScope(scopes, [...data.customers, ...data.tenders]) || scopeId);
       setForm({ mode: item ? 'edit' : 'new', value, original: { ...value }, customerMode: data.customers.length ? 'existing' : 'new', customerName: '', newCustomerId: crypto.randomUUID() });
       setFormError(''); setConflict(null);
     };
@@ -173,6 +171,10 @@ export function createTendersWorkspace(React, { request }) {
         const changed = Object.fromEntries(Object.keys(FIELDS).filter((key) => currentForm.value[key] !== currentForm.original[key]).map((key) => [key, currentForm.value[key]]));
         submitted = serializeItem({ ...latestOverride, ...changed, version: latestOverride.version });
       }
+      if (currentForm.mode === 'new' && currentForm.customerMode === 'existing') {
+        const customer = dataRef.current.customers.find((item) => item.id === submitted.customerId);
+        if (customer) submitted.responsibilityScopeId = customer.responsibilityScopeId;
+      }
       if (!submitted.title?.trim()) { setFormError('Введите название тендера или проекта.'); return; }
       if (submitted.status === 'won' && !submitted.winReason?.trim()) { setFormError('Укажите результат: что выиграно и на каких условиях.'); return; }
       if (submitted.status === 'closed' && !submitted.closeReason?.trim()) { setFormError('Укажите причину закрытия.'); return; }
@@ -187,7 +189,7 @@ export function createTendersWorkspace(React, { request }) {
           if (known) submitted.customerId = known.id;
           else {
             savingCustomer = true;
-            const customer = await request('/tenders/customers', { method: 'PUT', body: JSON.stringify({ id: currentForm.newCustomerId, responsibilityScopeId: targetScope, version: 0, name: currentForm.customerName.trim() }) }, token);
+            const customer = await request('/tenders/customers', { method: 'PUT', body: JSON.stringify({ id: currentForm.newCustomerId, responsibilityScopeId: submitted.responsibilityScopeId, version: 0, name: currentForm.customerName.trim() }) }, token);
             if (!alive.current || scopeRef.current !== targetScope) return;
             upsertLocal('customers', customer); submitted.customerId = customer.id; savingCustomer = false;
           }
@@ -255,7 +257,7 @@ export function createTendersWorkspace(React, { request }) {
       setComments((current) => ({ ...current, [item.id]: { ...draft, sentText: text } }));
       busyRef.current = true; setBusy(`comment:${item.id}`); setCommentErrors((current) => ({ ...current, [item.id]: '' })); setError(''); setNotice('');
       try {
-        const saved = await request('/tenders/comments', { method: 'POST', body: JSON.stringify({ id: draft.id, tenderId: item.id, responsibilityScopeId: targetScope, text }) }, token);
+        const saved = await request('/tenders/comments', { method: 'POST', body: JSON.stringify({ id: draft.id, tenderId: item.id, responsibilityScopeId: item.responsibilityScopeId, text }) }, token);
         if (!alive.current || scopeRef.current !== targetScope) return;
         upsertLocal('events', saved); setComments((current) => { const next = { ...current }; delete next[item.id]; return next; }); setCommentingId((current) => current === item.id ? null : current); setNotice('Комментарий добавлен.');
         await refreshAfterSave(targetScope);
@@ -346,13 +348,13 @@ export function createTendersWorkspace(React, { request }) {
       const date = (key) => text(key, { type: 'date', onChange: (event) => changeForm(key, event.target.value || null) });
       const showValue = (key, val) => key === 'customerId' ? customerName(val) : key === 'status' ? nameOf(STAGES, val) : key === 'deliveryType' ? nameOf(DELIVERY, val) : key === 'kind' ? nameOf(KINDS, val) : val || 'Не указано';
       const conflicts = conflict ? Object.keys(FIELDS).filter((key) => value[key] !== form.original[key] && value[key] !== conflict[key]) : [];
-      return h(Dialog, { title: statusOnly ? nameOf(STAGES, value.status) : form.mode === 'new' ? 'Новый тендер' : 'Редактировать тендер', subtitle: statusOnly ? `${customerName(value.customerId)} · ${value.title}` : scopeLabel(currentScope || {}), onClose: closeForm, busy: Boolean(busy), compact: statusOnly },
+      return h(Dialog, { title: statusOnly ? nameOf(STAGES, value.status) : form.mode === 'new' ? 'Новый тендер' : 'Редактировать тендер', subtitle: statusOnly ? `${customerName(value.customerId)} · ${value.title}` : 'Заказчики и тендеры', onClose: closeForm, busy: Boolean(busy), compact: statusOnly },
         h('form', { onSubmit: (event) => saveForm(event) }, h('fieldset', { className: 'tenders-form-grid', disabled: Boolean(busy) },
           !statusOnly && h(React.Fragment, null,
             form.mode === 'new' && h('div', { className: 'tenders-segment is-wide', 'aria-label': 'Выбор заказчика' }, ...[['existing', 'Выбрать заказчика'], ['new', 'Новый заказчик']].map(([id, label]) => button(label, () => setForm((current) => ({ ...current, customerMode: id })), { key: id, 'aria-pressed': form.customerMode === id }))),
             form.mode === 'new' && form.customerMode === 'new'
               ? field('Название заказчика', h('input', { required: true, maxLength: 200, value: form.customerName, onChange: (event) => setForm((current) => ({ ...current, customerName: event.target.value })) }), 'Заказчик сохранится вместе с первым тендером.', true)
-              : field('Заказчик', h('select', { required: true, value: value.customerId, onChange: (event) => changeForm('customerId', event.target.value) }, h('option', { value: '' }, 'Выберите заказчика'), ...data.customers.map((customer) => h('option', { key: customer.id, value: customer.id }, customer.name))), null, true),
+              : field('Заказчик', h('select', { required: true, value: value.customerId, onChange: (event) => changeForm('customerId', event.target.value) }, h('option', { value: '' }, 'Выберите заказчика'), ...data.customers.filter((customer) => form.mode === 'new' || customer.responsibilityScopeId === value.responsibilityScopeId).map((customer) => h('option', { key: customer.id, value: customer.id }, customer.name))), null, true),
             field('Название тендера или проекта', text('title', { required: true, maxLength: 200, placeholder: 'Доставка по Москве · осень' }), null, true),
             field('Тип проекта', select('kind', KINDS)), form.mode !== 'new' ? field('Статус', select('status', STAGES)) : h('p', { className: 'tenders-form-hint' }, 'Новая карточка появится в колонке «Запланировано».'),
             field('Количество авто', text('vehicleCount', { maxLength: 160, placeholder: 'Например, 10–15' })), field('Тип доставки', select('deliveryType', DELIVERY)),
@@ -388,11 +390,11 @@ export function createTendersWorkspace(React, { request }) {
 
     return h('main', { className: 'tenders-workspace' },
       h('header', { className: 'tenders-heading' }, h('div', null, h('span', { className: 'tenders-eyebrow' }, 'РАБОТА С ЗАКАЗЧИКАМИ'), h('h1', null, 'Тендеры'), h('p', null, 'Потребности, договорённости и следующий шаг — в одной карточке.')), h('div', { className: 'tenders-actions' }, button('Обновить', () => scopeId ? refresh() : setContextKey((key) => key + 1), { disabled: contextLoading || loading || Boolean(busy) }), button('+ Новый тендер', () => openForm(), { className: 'button tenders-primary', disabled: !scopeId || !loaded || loading || Boolean(busy) }))),
-      contextLoading && h('div', { className: 'tenders-loading', role: 'status' }, 'Загружаем доступные проекты…'),
+      contextLoading && h('div', { className: 'tenders-loading', role: 'status' }, 'Загружаем тендеры…'),
       contextError && h('div', { className: 'tenders-error', role: 'alert' }, contextError),
-      !contextLoading && !contextError && !scopes.length && h('div', { className: 'tenders-empty' }, h('h2', null, 'Нет доступных областей ответственности'), h('p', null, actor?.role === 'access_admin' ? 'Добавьте область ответственности в администрировании и назначьте её тендерному специалисту.' : 'Попросите администратора назначить вам область ответственности. После назначения нажмите «Обновить».')),
+      !contextLoading && !contextError && !scopes.length && h('div', { className: 'tenders-empty' }, h('h2', null, 'Тендеры пока недоступны'), h('p', null, actor?.role === 'access_admin' ? 'Добавьте область ответственности в администрировании и назначьте её тендерному специалисту.' : 'Попросите администратора назначить вам область ответственности. После назначения нажмите «Обновить».')),
       scopes.length > 0 && h(React.Fragment, null,
-        h('div', { className: 'tenders-scope-row' }, field('Проект', h('select', { value: scopeId, disabled: Boolean(busy) || loading, onChange: (event) => chooseScope(event.target.value) }, ...scopes.map((scope) => h('option', { key: scope.responsibilityScopeId, value: scope.responsibilityScopeId }, scopeLabel(scope))))), h('p', null, 'У одного заказчика может быть несколько тендеров. Статус и комментарии меняются в канбане и таблице.')),
+        h('p', { className: 'tenders-muted' }, 'У одного заказчика может быть несколько тендеров. Статус и комментарии меняются в канбане и таблице.'),
         error && h('div', { className: 'tenders-error', role: 'alert' }, error), notice && h('div', { className: 'tenders-notice', role: 'status' }, notice),
         h('div', { className: 'tenders-workbar' }, h('div', { className: 'tenders-view-controls' },
           h('div', { className: 'tenders-segment', role: 'group', 'aria-label': 'Вид тендеров' }, button('Канбан', () => setView('board'), { 'aria-pressed': view === 'board' }), button('Таблица', () => setView('table'), { 'aria-pressed': view === 'table' })),

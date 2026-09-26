@@ -411,16 +411,24 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
       editedArticle.rows[0].body,
       "Повторная правка другого проекта",
     );
+    for (const [responsibilityScopeId, assigneeId, title] of [[ids.scope, ids.drivers[0], 'Задача первой команды'], [otherScope, ids.drivers[1], 'Задача второй команды']]) {
+      await api('POST', '/team/tasks', { id: randomUUID(), operationId: randomUUID(), responsibilityScopeId, assigneeId, title, description: '', dueDate: null });
+    }
+    await adminPage.getByRole('navigation', { name: 'Разделы команды' }).getByRole('button', { name: 'Задачи', exact: true }).click();
+    await adminPage.getByRole('button', { name: 'Открыть задачу: Задача первой команды', exact: true }).waitFor();
+    await adminPage.getByRole('button', { name: 'Открыть задачу: Задача второй команды', exact: true }).click();
+    await adminPage.getByRole('button', { name: 'Редактировать задачу', exact: true }).click();
+    await adminPage.getByLabel('Название задачи', { exact: true }).fill('Обновлённая задача второй команды');
+    await adminPage.getByRole('button', { name: 'Сохранить задачу', exact: true }).click();
+    await adminPage.getByRole('dialog', { name: 'Задача', exact: true }).getByRole('heading', { name: 'Обновлённая задача второй команды', exact: true }).waitFor();
+    const updatedTask = (await adminPool.query('SELECT responsibility_scope_id FROM team_tasks WHERE title=$1', ['Обновлённая задача второй команды'])).rows[0];
+    assert.equal(updatedTask.responsibility_scope_id, otherScope);
+    await adminPage.getByRole('button', { name: 'Закрыть задача', exact: true }).click();
+    assert.equal(await adminPage.getByLabel('Проект', { exact: true }).count(), 0);
     await adminPage
       .getByRole("button", { name: "Сводки", exact: true })
       .click();
-    await adminPage
-      .getByLabel("Проект", { exact: true })
-      .selectOption(otherScope);
-    assert.equal(
-      await adminPage.getByLabel("Проект", { exact: true }).inputValue(),
-      otherScope,
-    );
+    assert.equal(await adminPage.getByLabel("Проект", { exact: true }).count(), 0);
     await adminPage
       .getByRole("button", { name: "Обсуждения", exact: true })
       .click();
@@ -454,7 +462,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
     });
     assert.deepEqual(errors, []);
     console.log(
-      "PASS company team browser: common list across grants/projects, original source writes and repeated article edits, stale detail and malformed-list guards, private/direct history hidden, admin-only audience and removable creator, aggregated knowledge, preserved work projects, mobile",
+      "PASS company team browser: common list across grants/projects, original source writes and repeated article edits, stale detail and malformed-list guards, private/direct history hidden, admin-only audience and removable creator, aggregated knowledge and tasks, original task scope writes, no project selectors, mobile",
     );
   } finally {
     if (browser) await browser.close();
@@ -462,5 +470,5 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
   }
 })().catch((error) => {
   console.error(error.stack || error.message);
-  process.exitCode = 1;
+  process.exit(1);
 });

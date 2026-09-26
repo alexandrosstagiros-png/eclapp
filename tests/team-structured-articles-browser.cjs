@@ -14,7 +14,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   try {
     const { ids, adminPool } = fixture;
     const sameCompanyScope = randomUUID();
-    await adminPool.query("INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,'Вторая учебная область')", [sameCompanyScope, ids.project]);
+    // Keep the seed's «Дневная группа» first in the server's named work-context
+    // ordering, while retaining another scope to test company-wide audiences.
+    await adminPool.query("INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,'Я · Вторая учебная область')", [sameCompanyScope, ids.project]);
     await adminPool.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id) VALUES($1,$2,$3,$4,$5)', [ids.admin, ids.legal, ids.region, ids.project, sameCompanyScope]);
     async function addCompany(name) {
       const legalId = randomUUID(), projectId = randomUUID(), scopeId = randomUUID();
@@ -26,8 +28,16 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     }
     const foreignScope = await addCompany('Чужая учебная компания');
     const emptyScope = await addCompany('Я · Компания без должностей');
+    // New articles use the account's work context; the unified UI has no project
+    // selector. Give the empty-company scenario its own administrator so its
+    // audience and inline position are exercised in the intended company.
+    const emptyAdministratorId = randomUUID();
+    await adminPool.query("INSERT INTO users(id,display_name,role,active,approved) VALUES($1,'Администратор компании без должностей','access_admin',true,true)", [emptyAdministratorId]);
+    await adminPool.query(`INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id)
+      SELECT $1,legal_entity_id,region_id,project_id,responsibility_scope_id FROM access_grants
+      WHERE user_id=$2 AND responsibility_scope_id=$3`, [emptyAdministratorId, ids.admin, emptyScope]);
     await adminPool.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=ANY($1::uuid[]) AND responsibility_scope_id=$2', [[ids.admin, ids.dispatcher], ids.scope]);
-    const admin = await fixture.devLogin(ids.admin), editor = await fixture.devLogin(ids.dispatcher);
+    const admin = await fixture.devLogin(ids.admin), editor = await fixture.devLogin(ids.dispatcher), emptyAdmin = await fixture.devLogin(emptyAdministratorId);
     const ok = result => { assert.ok([200, 201].includes(result.status), `HTTP ${result.status}: ${JSON.stringify(result.body)}`); return result.body; };
     const api = async (method, route, body, session = admin) => ok(await fixture.request(method, route, body, session.accessToken));
     async function position(scope, title) {
@@ -79,10 +89,12 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       'Результат': 'Следующий диспетчер подтвердил получение смены.',
     };
     async function newArticle(page, scope) {
+      const positions = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/team/article-positions'
+        && new URL(response.url()).searchParams.get('responsibilityScopeId') === scope && response.request().method() === 'GET');
       await page.getByRole('button', { name: 'Новая статья', exact: true }).click();
       await field(page, 'Тема').waitFor();
-      const project = field(page, 'Проект');
-      if (await project.count()) await project.selectOption(scope);
+      assert.equal((await positions).status(), 200, 'The audience directory must load from the expected work context');
+      assert.equal(await field(page, 'Проект').count(), 0, 'The unified editor has no project selector');
     }
     async function selectArticle(page) {
       await page.locator('.team-knowledge-results .team-article-item').filter({ hasText: articleTitle }).click();
@@ -105,23 +117,27 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       await page.getByRole('heading', { name: articleTitle, exact: true }).waitFor();
       return response.json();
     }
-    const administrator = await pageFor(admin);
-    await newArticle(administrator, emptyScope);
-    await field(administrator, 'Тема').fill('Несохранённый учебный черновик');
-    await field(administrator, 'Причина создания').fill('Черновик должен остаться после добавления должности.');
-    assert.equal(await field(administrator, 'Для кого').locator('option[value]:not([value=""])').count(), 0);
-    await administrator.getByRole('button', { name: 'Добавить должность', exact: true }).click();
-    await field(administrator, 'Название должности').fill('Новая учебная должность');
-    const pendingPosition = administrator.waitForResponse(response => response.request().method() === 'PUT' && /\/team\/organization\/positions\/[^/]+$/.test(new URL(response.url()).pathname));
-    await administrator.getByRole('button', { name: 'Сохранить должность', exact: true }).click();
-    assert.equal((await pendingPosition).status(), 200);
-    assert.equal(await field(administrator, 'Тема').inputValue(), 'Несохранённый учебный черновик');
-    assert.equal(await field(administrator, 'Причина создания').inputValue(), 'Черновик должен остаться после добавления должности.');
+    const emptyAdministrator = await pageFor(emptyAdmin);
+    await newArticle(emptyAdministrator, emptyScope);
+    await field(emptyAdministrator, 'Тема').fill('Несохранённый учебный черновик');
+    await field(emptyAdministrator, 'Причина создания').fill('Черновик должен остаться после добавления должности.');
+    assert.equal(await field(emptyAdministrator, 'Для кого').locator('option[value]:not([value=""])').count(), 0);
+    await emptyAdministrator.getByRole('button', { name: 'Добавить должность', exact: true }).click();
+    await field(emptyAdministrator, 'Название должности').fill('Новая учебная должность');
+    const pendingPosition = emptyAdministrator.waitForResponse(response => response.request().method() === 'PUT' && /\/team\/organization\/positions\/[^/]+$/.test(new URL(response.url()).pathname));
+    await emptyAdministrator.getByRole('button', { name: 'Сохранить должность', exact: true }).click();
+    const positionResponse = await pendingPosition;
+    assert.equal(positionResponse.status(), 200);
+    assert.equal(positionResponse.request().postDataJSON().responsibilityScopeId, emptyScope);
+    assert.equal(await field(emptyAdministrator, 'Тема').inputValue(), 'Несохранённый учебный черновик');
+    assert.equal(await field(emptyAdministrator, 'Причина создания').inputValue(), 'Черновик должен остаться после добавления должности.');
     assert.equal((await api('GET', `/team/article-positions?responsibilityScopeId=${emptyScope}`)).positions.length, 1);
-    await administrator.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await emptyAdministrator.getByRole('button', { name: 'Отменить', exact: true }).click();
+    await emptyAdministrator.context().close();
     assert.equal((await api('GET', '/team/articles')).articles.length, 0);
     console.log('PASS empty-company inline position creation preserves the unsaved article draft');
 
+    const administrator = await pageFor(admin);
     await newArticle(administrator, ids.scope);
     assert.equal(await metadata(administrator, 'Автор').textContent(), admin.actor.displayName);
     assert.equal((await metadata(administrator, 'Версия').textContent()).trim(), '1');
@@ -143,6 +159,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await administrator.screenshot({ path: path.join(output, 'structured-editor-desktop.png'), fullPage: true });
     const created = await save(administrator);
     assert.equal(created.structured, true);
+    assert.equal(administrator.articleSaveRequests.at(-1).responsibilityScopeId, ids.scope);
     assert.equal(created.version, 1);
     assert.equal(created.authorId, admin.actor.id);
     assert.equal(created.updatedByName, null);
@@ -236,4 +253,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await fixture.close();
   }
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack || error.message); process.exit(1); });

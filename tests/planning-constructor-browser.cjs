@@ -159,4 +159,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ managerLogin: 'passed', createForm: 'passed', requiredFieldBlocksExport: 'passed', automaticDriver: 'passed', csv: 'passed', explicitApplyOnly: 'passed', oldPlanVersionRetained: 'passed', editAndReorder: 'passed', latestDefaultForNewDate: 'passed', persistedReload: 'passed', mobileOverflow: false, javascriptErrors: 0, builtFrontend: process.env.PLANNING_BUILT_FRONTEND === 'true', screenshots: out }));
   } finally { if (browser) await browser.close(); await f.close(); }
-})().catch(error => { console.error(error.stack); process.exitCode = 1; });
+})().catch(error => { console.error(error.stack); process.exit(1); });

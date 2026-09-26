@@ -28,10 +28,6 @@ async function createApp() {
     if (config.trustProxyLoopback)
         app.getHttpAdapter().getInstance().set("trust proxy", "127.0.0.1");
     app.use((req, res, next) => {
-        if (req.method === 'PUT' && /^\/api\/v1\/profile\/?$/.test(req.path))
-            return importBody(req, res, next);
-        if (['POST', 'PUT'].includes(req.method) && /^\/api\/v1\/team\/(tasks|outcomes)(?:\/[a-f0-9-]+)?\/?$/i.test(req.path))
-            return importBody(req, res, next);
         req.correlationId = (0, node_crypto_1.randomUUID)();
         res.setHeader("X-Correlation-Id", req.correlationId);
         res.setHeader("Cache-Control", "no-store");
@@ -47,6 +43,10 @@ async function createApp() {
     const teamMessageBody = (0, express_1.json)({ limit: "36mb" });
     const teamMessageEditBody = (0, express_1.json)({ limit: "64kb" });
     app.use((req, res, next) => {
+        if (req.method === 'PUT' && /^\/api\/v1\/profile\/?$/.test(req.path))
+            return importBody(req, res, next);
+        if (['POST', 'PUT'].includes(req.method) && /^\/api\/v1\/team\/(tasks|outcomes)(?:\/[a-f0-9-]+)?\/?$/i.test(req.path))
+            return importBody(req, res, next);
         if (req.method === 'POST' && (/^\/api\/v1\/recruitment\/onboarding\/sessions\/[a-f0-9-]+\/photos\/?$/i.test(req.path) || /^\/api\/v1\/recruitment-onboarding\/upload\/?$/.test(req.path)))
             return uploadBody(req, res, next);
         if (/^\/api\/v1\/(?:recruitment\/onboarding|recruitment-onboarding)(?:\/|$)/.test(req.path))

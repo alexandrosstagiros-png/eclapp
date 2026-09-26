@@ -15574,7 +15574,8 @@ function lg({ token: c, actor: d, onExpired: f }) {
     S = h.useRef(crypto.randomUUID()),
     _ = h.useRef({}),
     ie = r?.scopes.filter((O) => Jo(d, O)) ?? [],
-    ye = ie[y],
+    relatedTariff = !Y && p.find((tariff) => tariff.contractReference === re.trim() && tariff.side === te),
+    ye = (relatedTariff && ie.find((scope) => scope.projectId === relatedTariff.projectId && scope.responsibilityScopeId === relatedTariff.responsibilityScopeId)) || ie[y],
     Te = d.role === "document_specialist";
   async function ne() {
     const [O, Ee] = await Promise.all([
@@ -15708,7 +15709,7 @@ function lg({ token: c, actor: d, onExpired: f }) {
             (O.preventDefault(),
               m.run(async () => {
                 if (!ye)
-                  throw new Ne(400, "Выберите область финансового доступа.");
+                  throw new Ne(400, "Нет доступа к созданию тарифов. Обратитесь к администратору.");
                 if (M.trim().length < 3)
                   throw new Ne(
                     400,
@@ -15807,32 +15808,6 @@ function lg({ token: c, actor: d, onExpired: f }) {
                   value: re,
                   onChange: (O) => le(O.target.value),
                   placeholder: "Номер договора, контрагент и спецификация",
-                }),
-              }),
-              n.jsx(ue, {
-                label: "Юрлицо, регион, проект и зона ответственности",
-                children: n.jsx("select", {
-                  value: y,
-                  disabled: !!Y,
-                  onChange: (O) => L(Number(O.target.value)),
-                  children: ie.map((O, Ee) =>
-                    n.jsxs(
-                      "option",
-                      {
-                        value: Ee,
-                        children: [
-                          O.legalEntityName,
-                          " · ",
-                          O.regionName,
-                          " · ",
-                          O.projectName,
-                          " · ",
-                          O.responsibilityScopeName,
-                        ],
-                      },
-                      `${O.legalEntityId}-${O.regionId}-${O.projectId}-${O.responsibilityScopeId}`,
-                    ),
-                  ),
                 }),
               }),
               n.jsxs("div", {
@@ -17551,7 +17526,8 @@ const zo = { delivery_note: "Транспортная накладная", waybi
 function rg({ token: c, onExpired: d, onCreated: f }) {
   const [r, g] = h.useState(null),
     [p, b] = h.useState("create"),
-    [D, J] = h.useState(0),
+    [driverId, setDriverId] = h.useState(""),
+    [vehicleId, setVehicleId] = h.useState(""),
     [j, U] = h.useState(""),
     [y, L] = h.useState(null),
     M = Jl(d),
@@ -17560,11 +17536,15 @@ function rg({ token: c, onExpired: d, onCreated: f }) {
   h.useEffect(() => {
     M.run(async () => g(await ze("/workflow/catalog", {}, c)));
   }, [c]);
-  const R = r?.scopes[D],
+  const selectedDriver = r?.drivers.find((driver) => driver.id === driverId),
+    sameScope = (left, right) => left.projectId === right.projectId && left.responsibilityScopeId === right.responsibilityScopeId,
+    vehicles = (r?.vehicles || []).filter(vehicle => !selectedDriver || vehicle.scopes?.some(scope => selectedDriver.scopes.some(assigned => sameScope(scope, assigned)))),
+    selectedVehicle = vehicles.find(vehicle => vehicle.id === vehicleId) || vehicles[0],
+    R = r?.scopes.find(scope => selectedVehicle?.scopes?.some(assigned => sameScope(scope, assigned)) && (!selectedDriver || selectedDriver.scopes.some(assigned => sameScope(scope, assigned)))),
     re = new TextEncoder().encode(j).byteLength > 25e4;
   function le() {
     if (!r || !R) return;
-    const K = r.vehicles[0],
+    const K = selectedVehicle,
       I = r.drivers.find((E) =>
         E.scopes.some(
           (se) =>
@@ -17663,6 +17643,7 @@ function rg({ token: c, onExpired: d, onCreated: f }) {
                   (await Ye(c, "/workflow/trips", Z),
                     (te.current = crypto.randomUUID()),
                     I.reset(),
+                    setDriverId(""),
                     f());
                 }, "Рейс создан. Он появился в списке и кабинете назначенного водителя.");
               },
@@ -17690,39 +17671,18 @@ function rg({ token: c, onExpired: d, onCreated: f }) {
                     }),
                   ],
                 }),
-                n.jsx(ue, {
-                  label: "Проект",
-                  children: n.jsx("select", {
-                    value: D,
-                    onChange: (K) => J(Number(K.target.value)),
-                    children: r.scopes.map((K, I) =>
-                      n.jsxs(
-                        "option",
-                        {
-                          value: I,
-                          children: [
-                            K.regionName,
-                            " · ",
-                            K.projectName,
-                            " ·",
-                            " ",
-                            K.responsibilityScopeName,
-                          ],
-                        },
-                        `${K.projectId}-${K.responsibilityScopeId}`,
-                      ),
-                    ),
-                  }),
-                }),
                 n.jsxs("div", {
                   className: "form-grid",
                   children: [
                     n.jsx(ue, {
                       label: "Автомобиль",
+                      hint: selectedDriver && !vehicles.length ? "Для этого водителя пока нет доступных автомобилей." : undefined,
                       children: n.jsx("select", {
                         name: "vehicle",
                         required: !0,
-                        children: r.vehicles.map((K) =>
+                        value: selectedVehicle?.id || "",
+                        onChange: event => setVehicleId(event.target.value),
+                        children: vehicles.map((K) =>
                           n.jsxs(
                             "option",
                             {
@@ -17748,20 +17708,14 @@ function rg({ token: c, onExpired: d, onCreated: f }) {
                         {
                           name: "driver",
                           required: !0,
+                          value: driverId,
+                          onChange: (event) => setDriverId(event.target.value),
                           children: [
                             n.jsx("option", {
                               value: "",
                               children: "Выберите водителя",
                             }),
                             r.drivers
-                              .filter((K) =>
-                                K.scopes.some(
-                                  (I) =>
-                                    I.projectId === R?.projectId &&
-                                    I.responsibilityScopeId ===
-                                      R?.responsibilityScopeId,
-                                ),
-                              )
                               .map((K) =>
                                 n.jsx(
                                   "option",
@@ -17771,7 +17725,6 @@ function rg({ token: c, onExpired: d, onCreated: f }) {
                               ),
                           ],
                         },
-                        D,
                       ),
                     }),
                   ],
@@ -17799,7 +17752,7 @@ function rg({ token: c, onExpired: d, onCreated: f }) {
                 n.jsx("div", {
                   className: "help-callout",
                   children:
-                    "Скачайте шаблон: в нём уже заполнены идентификаторы вашего проекта, транспорта и водителя. Каждая строка создаёт один рейс.",
+                    "Скачайте шаблон: в нём уже заполнены данные транспорта и водителя. Каждая строка создаёт один рейс.",
                 }),
                 n.jsx("button", {
                   className: "button secondary",
@@ -18797,7 +18750,8 @@ function og({
                                           pe
                                             ? `${Do[m]}. Отметка получена сервером и доступна диспетчеру.`
                                             : "Отметка сохранена на устройстве. Диспетчер увидит её после отправки.",
-                                        );
+                              m,
+                            );
                                     }));
                                 },
                                 children: [
@@ -18819,8 +18773,7 @@ function og({
                                   }),
                                 ],
                               },
-                              m,
-                            );
+                                        );
                           },
                         ),
                       }),
@@ -19468,7 +19421,7 @@ function hg({ token: c, actor: d, onExpired: f }) {
         ? n.jsx("p", { role: "status", children: "Загружаем водителей…" })
         : r.length
           ? n.jsx(ue, {
-              label: "Водитель, проект и зона ответственности",
+              label: "Водитель",
               children: n.jsx("select", {
                 value: p,
                 onChange: (te) => b(te.target.value),
@@ -19480,9 +19433,7 @@ function hg({ token: c, actor: d, onExpired: f }) {
                       children: [
                         te.driverLabel,
                         " · ",
-                        te.projectName,
-                        " · ",
-                        te.responsibilityScopeName,
+                        te.accountId ? `Счёт ${te.accountId.slice(0, 8)}` : "Новый счёт",
                       ],
                     },
                     Zs(te),
@@ -20492,6 +20443,7 @@ function jg({ token: c, actor: d, onExpired: f }) {
     [H, fe] = h.useState(null),
     Y = Jl(f),
     xe = h.useRef(crypto.randomUUID()),
+    registryInput = h.useRef(""),
     ae = h.useRef(crypto.randomUUID()),
     V = h.useRef(crypto.randomUUID()),
     W = h.useRef(crypto.randomUUID()),
@@ -20525,45 +20477,29 @@ function jg({ token: c, actor: d, onExpired: f }) {
     });
   }, [c]);
   function de(S) {
+    registryInput.current = S;
     (R(S), le(null), (xe.current = crypto.randomUUID()));
   }
-  const v = new TextEncoder().encode(te).byteLength > 25e4,
-    m = n.jsx(ue, {
-      label: "Проект",
-      children: n.jsx("select", {
-        value: D,
-        onChange: (S) => {
-          (J(Number(S.target.value)),
-            le(null),
-            (xe.current = crypto.randomUUID()));
-        },
-        children: ve.length
-          ? ve.map((S, _) =>
-              n.jsxs(
-                "option",
-                {
-                  value: _,
-                  children: [
-                    S.regionName,
-                    " · ",
-                    S.projectName,
-                    " ·",
-                    " ",
-                    S.responsibilityScopeName,
-                  ],
-                },
-                `${S.projectId}-${S.responsibilityScopeId}`,
-              ),
-            )
-          : he.map((S, _) =>
-              n.jsxs(
-                "option",
-                { value: _, children: ["Доступная область ", _ + 1] },
-                `${S.projectId}-${S.responsibilityScopeId}`,
-              ),
-            ),
-      }),
-    });
+  async function previewRegistry() {
+    const csv = te;
+    const choices = ve.length ? ve : he;
+    const previews = await Promise.all(choices.map(async (scope, index) => ({
+      index,
+      scope: { projectId: scope.projectId, responsibilityScopeId: scope.responsibilityScopeId },
+      preview: await Ye(c, "/finance/registries/preview", { projectId: scope.projectId, responsibilityScopeId: scope.responsibilityScopeId, csv }),
+    })));
+    if (registryInput.current !== csv) return;
+    const matches = previews.filter(({ preview }) => preview.rows.some(row => row.tripId));
+    if (matches.length > 1) {
+      throw new Ne(400, "В файле рейсы из нескольких договоров. Разделите реестр по договорам и повторите загрузку.");
+    }
+    const selected = matches[0] || previews[0];
+    if (selected) {
+      J(selected.index);
+      le({ ...selected.preview, scope: selected.scope, csv });
+    }
+  }
+  const v = new TextEncoder().encode(te).byteLength > 25e4;
   return n.jsxs("div", {
     className: "finance-workspace",
     children: [
@@ -20662,7 +20598,6 @@ function jg({ token: c, actor: d, onExpired: f }) {
                 className: "surface data-form",
                 children: [
                   n.jsx("h3", { children: "Новый реестр из CSV" }),
-                  m,
                   n.jsxs("div", {
                     className: "action-row",
                     children: [
@@ -20721,14 +20656,7 @@ DEMO-001,5300.00`,
                     className: "button secondary",
                     disabled: Y.busy || !te.trim() || !ce || v,
                     onClick: () => {
-                      Y.run(async () =>
-                        le(
-                          await Ye(c, "/finance/registries/preview", {
-                            ...ce,
-                            csv: te,
-                          }),
-                        ),
-                      );
+                      Y.run(previewRegistry);
                     },
                     children: "Проверить и рассчитать",
                   }),
@@ -20748,8 +20676,8 @@ DEMO-001,5300.00`,
                           onClick: () => {
                             Y.run(async () => {
                               const S = await Ye(c, "/finance/registries", {
-                                ...ce,
-                                csv: te,
+                                ...re.scope,
+                                csv: re.csv,
                                 idempotencyKey: xe.current,
                               });
                               (I(S), Z(!1), de(""), await B());
@@ -20993,7 +20921,6 @@ DEMO-001,5300.00`,
                     },
                     children: [
                       n.jsx("h3", { children: "Новая версия тарифа" }),
-                      m,
                       n.jsxs("div", {
                         className: "form-grid",
                         children: [
@@ -21090,15 +21017,15 @@ DEMO-001,5300.00`,
                                         n.jsxs("strong", {
                                           children: ["Версия ", S.version],
                                         }),
-                                        n.jsx("small", {
-                                          children:
-                                            ve.find(
-                                              (_) =>
-                                                _.projectId === S.projectId &&
-                                                _.responsibilityScopeId ===
-                                                  S.responsibilityScopeId,
-                                            )?.projectName ??
-                                            "Доступный проект",
+                                        n.jsx("button", {
+                                          className: "text-button",
+                                          disabled: Y.busy,
+                                          onClick: () => {
+                                            const index = ve.findIndex(scope => scope.projectId === S.projectId && scope.responsibilityScopeId === S.responsibilityScopeId);
+                                            if (index < 0) return;
+                                            J(index); E(true); ae.current = crypto.randomUUID();
+                                          },
+                                          children: "Новая версия",
                                         }),
                                       ],
                                     }),
@@ -21867,7 +21794,7 @@ function Eg({ token: c, onExpired: d }) {
             children: [
               n.jsx("label", {
                 htmlFor: "payroll-period",
-                children: "Период и проект",
+                children: "Расчётный листок",
               }),
               n.jsx("select", {
                 id: "payroll-period",
@@ -21875,7 +21802,7 @@ function Eg({ token: c, onExpired: d }) {
                 onChange: (H) => {
                   (D(null), p(H.target.value));
                 },
-                children: f.map((H) =>
+                children: f.map((H, index) =>
                   n.jsxs(
                     "option",
                     {
@@ -21883,11 +21810,7 @@ function Eg({ token: c, onExpired: d }) {
                       children: [
                         Sg(H),
                         " · ",
-                        H.project.name,
-                        " · ",
-                        H.legalEntity.name,
-                        " · ",
-                        H.responsibilityScope.name,
+                        `Расчёт ${index + 1}`,
                       ],
                     },
                     H.id,
@@ -23835,7 +23758,7 @@ function Yg({ token: c, onExpired: d }) {
       n.jsx("p", {
         className: "muted",
         children:
-          "Настройте фото, документы, оборудование и дополнительные требования для проекта. Опубликованные версии сохраняются в истории отчётов.",
+          "Настройте фото, документы, оборудование и дополнительные требования к осмотру. Опубликованные версии сохраняются в истории отчётов.",
       }),
       n.jsx(ea, { text: L }),
       ee && n.jsx("div", { className: "notice", role: "status", children: ee }),
@@ -23845,7 +23768,7 @@ function Yg({ token: c, onExpired: d }) {
         children: [
           n.jsxs("label", {
             children: [
-              "Область действия",
+              "Шаблон осмотра",
               n.jsxs("select", {
                 value: g,
                 onChange: (E) => {
@@ -23855,15 +23778,16 @@ function Yg({ token: c, onExpired: d }) {
                   n.jsx("option", {
                     value: "",
                     disabled: !0,
-                    children: "Выберите область ответственности",
+                    children: "Выберите шаблон осмотра",
                   }),
-                  f?.scopes.map((E, se) =>
-                    n.jsx(
+                  f?.scopes.map((E, se) => {
+                    const template = f.templates.filter(item => item.scope.responsibilityScopeId === E.responsibilityScopeId).sort((a, b) => b.version - a.version)[0];
+                    return n.jsx(
                       "option",
-                      { value: se, children: E.name },
+                      { value: se, children: template ? `${template.title} · версия ${template.version} · ${template.items.length} пунктов` : `Новый шаблон осмотра ${se + 1}` },
                       `${E.legalEntityId}:${E.regionId}:${E.projectId}:${E.responsibilityScopeId}`,
-                    ),
-                  ),
+                    );
+                  }),
                 ],
               }),
             ],
@@ -23880,7 +23804,7 @@ function Yg({ token: c, onExpired: d }) {
                   className: "input-hint",
                   children: U
                     ? `Текущая версия: ${U}. Изменения создадут новую версию.`
-                    : "Первый шаблон для этой области.",
+                    : "Новый шаблон осмотра.",
                 }),
                 n.jsxs("label", {
                   children: [
@@ -24775,22 +24699,6 @@ function Zg({ actor: c, token: d, onExpired: f }) {
             n.jsxs("div", {
               className: "comm-form-grid",
               children: [
-                r.scopes.length > 1 &&
-                  n.jsx(ue, {
-                    label: "Проект и область работы",
-                    children: n.jsx("select", {
-                      value: se,
-                      onChange: (F) => P(Number(F.target.value)),
-                      disabled: M,
-                      children: r.scopes.map((F, Ae) =>
-                        n.jsx(
-                          "option",
-                          { value: Ae, children: F.label },
-                          `${F.projectId}-${F.responsibilityScopeId}`,
-                        ),
-                      ),
-                    }),
-                  }),
                 n.jsx(ue, {
                   label: "Тип обращения",
                   children: n.jsx("select", {

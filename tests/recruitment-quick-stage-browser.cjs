@@ -285,7 +285,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.ok(await externalPage.evaluate(() => document.documentElement.scrollWidth <= innerWidth), 'external quick stage fits mobile');
     await save('access', { ...grant, responsibilityScopeId: ids.scope, status: 'revoked' });
     await chooseStage(externalPage, own, demands[0], 'interview', 403);
-    await externalPage.getByRole('alert').filter({ hasText: 'Нет доступа' }).waitFor();
+    await externalPage.getByRole('alert').filter({ hasText: 'Доступ к потребностям мог быть отозван или его срок истёк' }).waitFor();
     assert.equal(await externalPage.locator('.recruitment-worklist tbody tr').count(), 0, 'revoked access clears candidate data');
     const persistedOwn = (await snapshot()).applications.find(item => item.id === ownApplication.id);
     assert.equal(persistedOwn.stage, 'contact', 'revoked recruiter cannot change their previously visible application');
@@ -298,4 +298,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     if (browser) await browser.close();
     await fixture.close();
   }
-})().catch(error => { console.error(error); process.exitCode = 1; });
+})().catch(error => { console.error(error); process.exit(1); });

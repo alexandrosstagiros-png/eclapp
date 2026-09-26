@@ -141,4 +141,4 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.deepEqual(errors, []);
     console.log('PASS driver assignment, mobile fuel report and staff acceptance, isolated costs, responsive rendering, zero browser exceptions');
   } finally { await browser?.close(); await fixture.close(); }
-})().catch(e => { console.error(e); process.exitCode = 1; });
+})().catch(e => { console.error(e); process.exit(1); });

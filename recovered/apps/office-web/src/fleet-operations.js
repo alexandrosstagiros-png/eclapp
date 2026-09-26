@@ -1,3 +1,4 @@
+import { createCompanyWorkRequest } from "./company-work-request.js";
 // SPDX-License-Identifier: MIT
 const TODAY = () => new Date().toLocaleDateString("en-CA");
 const money = (cents) =>
@@ -46,6 +47,7 @@ const NAV = [
   ["warehouses", "Склады"],
 ];
 const LABEL = Object.fromEntries(NAV);
+const CATALOG_KINDS = ["contractors", "parts", "warehouses"];
 const EMPTY = () => ({
   records: Object.fromEntries(
     NAV.filter(([key]) => key !== "stock").map(([key]) => [key, []]),
@@ -340,7 +342,8 @@ export function createFleetOperationsWorkspace(React, { request }) {
           : (d.type === "drivers"
               ? data.drivers
               : data.records[d.type] || []
-            ).map((row) => [row.id, recordName(d.type, row, data)]);
+            ).filter(row => !data.referenceScopeId || row.responsibilityScopeId === data.referenceScopeId || row.responsibilityScopeIds?.includes(data.referenceScopeId))
+            .map((row) => [row.id, recordName(d.type, row, data)]);
       input = h(
         "select",
         {
@@ -540,6 +543,12 @@ export function createFleetOperationsWorkspace(React, { request }) {
     driver = false,
   }) {
     const [draft, setDraft] = useState(() => structuredClone(record));
+    const [catalogVehicleId, setCatalogVehicleId] = useState("");
+    const chooseCatalogVehicle = !record.version && CATALOG_KINDS.includes(kind) && data.scopeCount > 1 && data.records.vehicles.length > 0;
+    const referenceScopeId = record.version ? record.responsibilityScopeId :
+      [draft.vehicleId, draft.contractorId, draft.warehouseId, draft.partId].map(id =>
+        Object.values(data.records).flat().find(row => row.id === id)?.responsibilityScopeId).find(Boolean);
+    const referenceData = { ...data, referenceScopeId };
     const defs = (FIELDS[kind] || []).filter(
       (d) => !driver || d.key !== "driverUserId",
     );
@@ -557,20 +566,30 @@ export function createFleetOperationsWorkspace(React, { request }) {
         {
           onSubmit: (e) => {
             e.preventDefault();
-            onSave(draft);
+            const catalogScope = chooseCatalogVehicle && data.records.vehicles.find(vehicle => vehicle.id === catalogVehicleId)?.responsibilityScopeId;
+            onSave(catalogScope ? { ...draft, responsibilityScopeId: catalogScope } : draft);
           },
         },
         error && h("p", { className: "error", role: "alert" }, error),
         h(
           "div",
           { className: "fleet-ops-form-grid" },
+          chooseCatalogVehicle && h("div", { className: "fleet-ops-field is-wide" },
+            h(Field, {
+              definition: F("catalogVehicleId", "Автомобиль для обслуживания", "vehicles"),
+              value: catalogVehicleId,
+              onChange: value => setCatalogVehicleId(value || ""),
+              data,
+              disabled: busy,
+            }),
+            h("p", { className: "fleet-ops-muted" }, "Если запись нужна для конкретного автомобиля, выберите его: она будет доступна в его ремонтах и закупках.")),
           ...defs.map((d) =>
             h(Field, {
               key: d.key,
               definition: d,
               value: draft[d.key],
               onChange: (value) => change(d.key, value),
-              data,
+              data: referenceData,
               disabled: disabled || busy,
             }),
           ),
@@ -579,7 +598,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
               definition: F("notes", "Примечание", "textarea"),
               value: draft.notes,
               onChange: (value) => change("notes", value),
-              data,
+              data: referenceData,
               disabled: disabled || busy,
             }),
         ),
@@ -588,7 +607,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
             kind,
             rows: draft.lines || [],
             onChange: (lines) => change("lines", lines),
-            data,
+            data: referenceData,
             disabled: disabled || busy,
           }),
         kind === "maintenance" &&
@@ -627,8 +646,14 @@ export function createFleetOperationsWorkspace(React, { request }) {
     onExpired,
     onDirtyChange,
     responsibilityScopeId: scopeId,
+    scopes = [],
+    importScopeIds = [],
     canWrite,
   }) {
+    const scopeList = useRef(scopes);
+    scopeList.current = scopes.length ? scopes : [{ responsibilityScopeId: scopeId }];
+    const companyRequest = useRef(null);
+    if (!companyRequest.current) companyRequest.current = createCompanyWorkRequest(request, () => scopeList.current);
     const [tab, setTab] = useState(
         view === "maintenance" ? "maintenance" : "orders",
       ),
@@ -678,7 +703,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
       const generation = ++gen.current;
       setLoading(true);
       try {
-        const result = await request(
+        const result = await companyRequest.current(
           `/fleet-operations?responsibilityScopeId=${encodeURIComponent(target)}`,
           { signal },
           token,
@@ -688,7 +713,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
           currentScope.current === target &&
           generation === gen.current
         ) {
-          setData({ ...EMPTY(), ...result });
+          setData({ ...EMPTY(), ...result, scopeCount: scopeList.current.length });
           setLoaded(true);
           setError("");
         }
@@ -735,7 +760,13 @@ export function createFleetOperationsWorkspace(React, { request }) {
       setError("");
       const target = scopeId;
       try {
-        const result = await request(
+        const importResults = path === "/fleet-operations/vehicles/import" && importScopeIds.length
+          ? await Promise.all(importScopeIds.map(id => request(path, { method: "POST", body: JSON.stringify({ ...body, responsibilityScopeId: id, idempotencyKey: crypto.randomUUID() }) }, token)))
+          : null;
+        const result = importResults ? {
+          created: importResults.reduce((sum, value) => sum + value.created, 0),
+          existing: importResults.reduce((sum, value) => sum + value.existing, 0),
+        } : await companyRequest.current(
           path,
           {
             method: path.match(
@@ -743,7 +774,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
             )
               ? "PUT"
               : "POST",
-            body: JSON.stringify({ ...body, responsibilityScopeId: target }),
+            body: JSON.stringify({ ...body, responsibilityScopeId: body.responsibilityScopeId || target }),
           },
           token,
         );
@@ -1261,7 +1292,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
                   value: opening[d.key],
                   onChange: (value) =>
                     setOpening((p) => ({ ...p, [d.key]: value })),
-                  data,
+                  data: { ...data, referenceScopeId: data.records.parts.find(row => row.id === opening.partId)?.responsibilityScopeId || data.records.warehouses.find(row => row.id === opening.warehouseId)?.responsibilityScopeId },
                 }),
               ),
             ),

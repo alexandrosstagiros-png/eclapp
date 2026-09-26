@@ -9,7 +9,7 @@ const { articleStructure, createArticlePosition } = require('./team-article-fixt
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 (async () => {
   const fixture = await createTestServer({ staffTeamActors: true, builtFrontend: process.env.TEAM_BUILT_FRONTEND === 'true' });
-  let browser;
+  let browser, releaseInitialSchedules;
   try {
     const { ids, request, devLogin } = fixture;
     await fixture.adminPool.query('UPDATE access_grants SET personal_data_visible=true');
@@ -75,7 +75,28 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByLabel('Для кого', { exact: true }).selectOption(articlePosition);
     await page.getByRole('button', { name: 'Сохранить статью', exact: true }).click();
     await page.getByRole('heading', { name: 'Как проверять договор', exact: true }).waitFor();
+    const earlierSummary = await api('POST', '/team/summaries', { responsibilityScopeId: scope,
+      periodStart: new Date(Date.now() - 3 * 86400000).toISOString(), periodEnd: new Date(Date.now() - 2 * 86400000).toISOString() });
+    const earlierSchedule = await api('PUT', '/team/schedules', { id: randomUUID(), responsibilityScopeId: scope,
+      enabled: false, frequency: 'daily', time: '08:05', timeZone: 'Europe/Moscow', weekday: 1, recipientIds: [] });
+    // A summary can be created while an unrelated initial list is still loading.
+    // Its mutation must neither discard the people/chat lists nor be overwritten by the older read.
+    const schedulesPath = '**/api/v1/team/schedules?*';
+    const initialSchedulesGate = new Promise(resolve => { releaseInitialSchedules = resolve; });
+    let captureScheduleSnapshot, rejectScheduleSnapshot;
+    const scheduleSnapshot = new Promise((resolve, reject) => { captureScheduleSnapshot = resolve; rejectScheduleSnapshot = reject; });
+    const initialSchedulesRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/v1/team/schedules');
+    await page.route(schedulesPath, async route => {
+      try {
+        const response = await route.fetch();
+        captureScheduleSnapshot(await response.json());
+        await initialSchedulesGate;
+        await route.fulfill({ response });
+      } catch (error) { rejectScheduleSnapshot(error); throw error; }
+    });
     await page.reload();
+    await initialSchedulesRequest;
+    assert.deepEqual((await scheduleSnapshot).schedules.map(item => item.id), [earlierSchedule.id]);
     await page.getByRole('heading', { name: 'Команда', exact: true }).waitFor();
     await tabs.getByRole('button', { name: 'База знаний', exact: true }).click();
     await page.getByText('Как проверять договор', { exact: true }).first().click();
@@ -86,6 +107,24 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByLabel('Окончание периода', { exact: true }).fill(moscow);
     await page.getByRole('button', { name: 'Создать сводку', exact: true }).click();
     await page.getByRole('button', { name: 'Поделиться', exact: true }).waitFor();
+    await page.locator('.team-summary-category.is-risk').getByText('Риск: поставка задерживается, нужно проверить срок.', { exact: true }).waitFor();
+    await tabs.getByRole('button', { name: 'Расписание', exact: true }).click();
+    await page.getByRole('button', { name: 'Добавить расписание', exact: true }).click();
+    await page.getByLabel('Периодичность', { exact: true }).selectOption('weekly');
+    await page.getByLabel('День недели', { exact: true }).selectOption('5');
+    await page.getByLabel('Время', { exact: true }).fill('09:30');
+    await page.getByRole('button', { name: 'Сохранить расписание', exact: true }).click();
+    await page.getByRole('heading', { name: 'Еженедельно в 09:30', exact: true }).waitFor();
+    assert.equal(await page.locator('.team-tabs-meta').innerText(), 'Загрузка…');
+    const initialSchedulesResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/team/schedules');
+    releaseInitialSchedules();
+    assert.equal((await initialSchedulesResponse).status(), 200);
+    await page.unroute(schedulesPath);
+    await page.getByRole('heading', { name: 'Ежедневно в 08:05', exact: true }).waitFor();
+    assert.equal(await page.getByRole('heading', { name: 'Еженедельно в 09:30', exact: true }).count(), 1);
+    await tabs.getByRole('button', { name: 'Сводки', exact: true }).click();
+    await page.locator('.team-summary-workspace .team-library-sidebar').getByText(earlierSummary.title, { exact: true }).waitFor();
+    assert.equal(await page.locator('.team-summary-workspace .team-library-sidebar .team-article-item').count(), 2);
     await page.locator('.team-summary-category.is-risk').getByText('Риск: поставка задерживается, нужно проверить срок.', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Поделиться', exact: true }).click();
     await page.getByRole('group', { name: 'Кому доступна сводка' }).getByRole('checkbox', { name: 'Диспетчер', exact: true }).check();
@@ -107,15 +146,10 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await recipient.getByText('Исходное сообщение недоступно: сводка не предоставляет доступ к чужой переписке. Текст сводки остаётся доступным.', { exact: true }).waitFor();
     assert.equal(await recipient.getByRole('dialog').count(), 0);
     await tabs.getByRole('button', { name: 'Расписание', exact: true }).click();
-    await page.getByRole('button', { name: 'Добавить расписание', exact: true }).click();
-    await page.getByLabel('Периодичность', { exact: true }).selectOption('weekly');
-    await page.getByLabel('День недели', { exact: true }).selectOption('5');
-    await page.getByLabel('Время', { exact: true }).fill('09:30');
-    await page.getByRole('button', { name: 'Сохранить расписание', exact: true }).click();
     await page.getByRole('heading', { name: 'Еженедельно в 09:30', exact: true }).waitFor();
     const scheduleState = await api('GET', `/team/schedules?responsibilityScopeId=${scope}`);
-    assert.equal(scheduleState.schedules.length, 1);
-    assert.equal(scheduleState.schedules[0].weekday, 5);
+    assert.equal(scheduleState.schedules.length, 2);
+    assert.equal(scheduleState.schedules.find(item => item.id !== earlierSchedule.id).weekday, 5);
     const employeePage = await pageFor(employee);
     await employeePage.getByRole('button', { name: 'Новый личный чат', exact: true }).click();
     dialog = employeePage.getByRole('dialog');
@@ -138,5 +172,5 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page.getByText('Сообщение потока 1', { exact: true }).waitFor();
     assert.deepEqual(errors, []);
     console.log('PASS team browser: channels, nested branches, sending, direct chat, knowledge persistence, summary/sharing, recipient restrictions, weekly schedule, desktop/mobile, no JavaScript errors');
-  } finally { if (browser) await browser.close(); await fixture.close(); }
-})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });
+  } finally { releaseInitialSchedules?.(); if (browser) await browser.close(); await fixture.close(); }
+})().catch(error => { console.error(error.stack || error.message); process.exit(1); });

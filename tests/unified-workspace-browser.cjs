@@ -1,0 +1,66 @@
+'use strict';
+// Scope selection is automatic; all fixtures and writes use disposable PostgreSQL.
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+(async () => {
+  const fixture = await createTestServer({ builtFrontend: process.env.UNIFIED_BUILT_FRONTEND === 'true' });
+  let browser;
+  try {
+    const { ids, adminPool, devLogin } = fixture;
+    const project = randomUUID(), scope = randomUUID();
+    await adminPool.query('INSERT INTO projects(id,name,legal_entity_id,region_id) VALUES($1,$2,$3,$4)', [project, 'Локальный тест — второй источник', ids.legal, ids.region]);
+    await adminPool.query('INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)', [scope, project, 'Вторая область']);
+    await adminPool.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible,finance_visible) VALUES($1,$2,$3,$4,$5,true,true)', [ids.dispatcher, ids.legal, ids.region, project, scope]);
+    await adminPool.query('UPDATE access_grants SET finance_visible=true,personal_data_visible=true WHERE user_id=$1', [ids.dispatcher]);
+    await adminPool.query('UPDATE access_grants SET project_id=$2,responsibility_scope_id=$3 WHERE user_id=$1', [ids.drivers[1], project, scope]);
+    await adminPool.query('UPDATE trips SET project_id=$2,responsibility_scope_id=$3 WHERE id=$1', [ids.trips[1], project, scope]);
+    const session = await devLogin(ids.dispatcher);
+    browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await context.addInitScript(value => sessionStorage.setItem('ecl.session.v2', JSON.stringify({ session: value })), session);
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(fixture.origin);
+    await page.getByRole('button', { name: 'Добавить рейсы', exact: true }).click();
+    await page.getByRole('heading', { name: 'Добавить рейсы', exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Проект', { exact: true }).count(), 0);
+    await page.getByLabel('Номер рейса', { exact: true }).fill('UNIFIED-SECOND');
+    await page.locator('select[name=driver]').selectOption(ids.drivers[1]);
+    await page.locator('input[name=route]').fill('Склад → Точка');
+    const created = page.waitForResponse(response => response.url().endsWith('/workflow/trips') && response.request().method() === 'POST');
+    await page.getByRole('button', { name: 'Создать рейс', exact: true }).click();
+    const createdResponse = await created;
+    assert.equal(createdResponse.status(), 201, JSON.stringify(await createdResponse.json()));
+    const trip = (await adminPool.query('SELECT project_id,responsibility_scope_id FROM trips WHERE reference=$1', ['UNIFIED-SECOND'])).rows[0];
+    assert.equal(trip.project_id, project);
+    assert.equal(trip.responsibility_scope_id, scope);
+    await page.getByRole('button', { name: 'Финансы и 1С', exact: true }).click();
+    await page.getByRole('heading', { name: 'Финансы и 1С', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Загрузить реестр', exact: true }).click();
+    assert.equal(await page.getByLabel('Проект', { exact: true }).count(), 0);
+    await page.getByLabel('Данные реестра', { exact: true }).fill('trip_reference,amount_rub\nUNIFIED-SECOND,5300.00');
+    await page.getByRole('button', { name: 'Проверить и рассчитать', exact: true }).click();
+    const save = page.getByRole('button', { name: 'Сохранить черновик', exact: true });
+    await save.waitFor();
+    assert.equal(await save.isEnabled(), true, 'preview resolves second source automatically');
+    const committed = page.waitForResponse(response => response.url().endsWith('/finance/registries') && response.request().method() === 'POST');
+    await save.click();
+    assert.equal((await committed).status(), 201);
+    const registry = (await adminPool.query('SELECT project_id,responsibility_scope_id FROM finance_registries ORDER BY created_at DESC LIMIT 1')).rows[0];
+    assert.equal(registry.responsibility_scope_id, scope);
+    await page.getByRole('button', { name: 'Загрузить реестр', exact: true }).click();
+    await page.getByLabel('Данные реестра', { exact: true }).fill('trip_reference,amount_rub\nUNIFIED-SECOND,5300.00\nDEMO-001,5300.00');
+    await page.getByRole('button', { name: 'Проверить и рассчитать', exact: true }).click();
+    await page.getByText('В файле рейсы из нескольких договоров. Разделите реестр по договорам и повторите загрузку.', { exact: true }).waitFor();
+    assert.equal(await save.count(), 0, 'ambiguous source cannot be silently committed');
+    assert.deepEqual(errors, []);
+    console.log('PASS unified workspace: all drivers, correct trip source, automatic registry source, mixed-source guard, no project dropdown or JS errors');
+  } finally {
+    if (browser) await browser.close();
+    await fixture.close();
+  }
+})().catch(error => { console.error(error); process.exit(1); });

@@ -89,7 +89,7 @@ export function createPlanningBuilder(React) {
   const button = (label, onClick, props = {}) => h('button', { type: 'button', className: 'button', onClick, ...props }, label);
   const field = (label, input, hint) => h('label', { className: 'planning-field' }, h('span', null, label), React.cloneElement(input, { 'aria-label': input.props['aria-label'] || label }), hint && h('small', null, hint));
 
-  return function PlanningBuilder({ templates = [], selectedTemplate, scopeLabel = '', onSave, onClose, onDirtyChange, busy = false, error = null }) {
+  return function PlanningBuilder({ templates = [], selectedTemplate, onSave, onClose, onDirtyChange, busy = false, error = null }) {
     const [draft, setDraft] = useState(() => draftFrom(selectedTemplate, selectedTemplate?.custom ? 'edit' : 'copy'));
     const [baseline, setBaseline] = useState(() => fingerprint(draft));
     const [sourceId, setSourceId] = useState(selectedTemplate?.id || templates[0]?.id || '');
@@ -249,7 +249,7 @@ export function createPlanningBuilder(React) {
           h('div', { className: 'planning-builder-settings-grid' },
             field('Название формы', h('input', { value: definition.label, maxLength: 120, disabled, onChange: (event) => changeDefinition({ label: event.target.value }), placeholder: 'Клиент · регион' })),
             field('Формат выдачи', h('select', { value: definition.kind, disabled, onChange: (event) => changeDefinition({ kind: event.target.value }) }, h('option', { value: 'table' }, 'Таблица · Excel / CSV'), h('option', { value: 'text' }, 'Текстовая заявка · TXT')))),
-          h('label', { className: 'planning-builder-check' }, h('input', { type: 'checkbox', checked: draft.makeDefault, disabled, onChange: (event) => { setDraft((previous) => ({ ...previous, makeDefault: event.target.checked })); setNotice(''); } }), h('span', null, 'Использовать эту форму для новых планов', scopeLabel && h('small', null, scopeLabel))),
+          h('label', { className: 'planning-builder-check' }, h('input', { type: 'checkbox', checked: draft.makeDefault, disabled, onChange: (event) => { setDraft((previous) => ({ ...previous, makeDefault: event.target.checked })); setNotice(''); } }), h('span', null, 'Использовать эту форму для новых планов')),
           h('p', { className: 'planning-help' }, 'Сохранение создаёт новую версию. В ранее сохранённых планах останется прежняя форма; обновить её можно отдельно в нужном плане.')),
         (validation || localError || externalError) && h('div', { className: 'planning-error', role: 'alert', ref: errorRef, tabIndex: -1 }, validation || localError || externalError, (localError || externalError) && draft.version > 0 && h('div', null, button('Сохранить изменения как копию', copyCurrentDraft, { disabled }))),
         notice && h('div', { className: 'planning-feedback', role: 'status' }, notice),

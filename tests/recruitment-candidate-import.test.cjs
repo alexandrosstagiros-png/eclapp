@@ -16,6 +16,72 @@ const resolution = (records, ids, patch = {}) => ({ schemaVersion: 1, sourceSha2
   targets: { 'Свои авто': { responsibilityScopeId: ids.scope, kind: 'driver' } }, sources: { 'Авито': 'avito' },
   recruiters: { 'Synthetic recruiter': ids.admin }, demands: {}, records, ...patch });
 
+test('candidate import deduplicates phones across company scopes and serializes with API creation', { timeout: 180000 }, async t => {
+  const f = await createTestServer(); t.after(() => f.close());
+  const { ids, adminPool: db } = f;
+  const peerScope = randomUUID(), foreignLegal = randomUUID(), foreignProject = randomUUID(), foreignScope = randomUUID();
+  await db.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=$1', [ids.admin]);
+  await db.query('INSERT INTO responsibility_scopes VALUES($1,$2,$3)', [peerScope, ids.project, 'Peer import scope']);
+  await db.query('INSERT INTO legal_entities VALUES($1,$2)', [foreignLegal, 'Foreign import company']);
+  await db.query('INSERT INTO projects VALUES($1,$2,$3,$4)', [foreignProject, 'Foreign import project', foreignLegal, ids.region]);
+  await db.query('INSERT INTO responsibility_scopes VALUES($1,$2,$3)', [foreignScope, foreignProject, 'Foreign import scope']);
+  for (const tuple of [[ids.legal, ids.region, ids.project, peerScope], [foreignLegal, ids.region, foreignProject, foreignScope]]) {
+    await db.query(`INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible)
+      VALUES($1,$2,$3,$4,$5,true)`, [ids.admin, ...tuple]);
+  }
+  // The API actor/recruiter is distinct from the import actor/recruiter so a
+  // shared user-row lock cannot accidentally serialize this regression.
+  const recruiter = randomUUID();
+  await db.query("INSERT INTO users(id,display_name,role,active,approved) VALUES($1,'Concurrent recruiter','recruiter',true,true)", [recruiter]);
+  await db.query(`INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible)
+    VALUES($1,$2,$3,$4,$5,true)`, [recruiter, ids.legal, ids.region, ids.project, ids.scope]);
+  const session = await f.devLogin(recruiter);
+  const create = phone => f.request('PUT', '/recruitment/candidates', { id: randomUUID(), responsibilityScopeId: ids.scope, version: 0,
+    fullName: 'Synthetic company candidate', phone, city: 'Москва', kind: 'driver', recruiterId: recruiter, source: 'manual', archived: false }, session.accessToken);
+  const source = batch([row(301, '+79995550301')]);
+  const choices = resolution({ 'Свои авто:301': decision() }, { ...ids, scope: peerScope });
+  assert.equal((await create('+79995550301')).status, 200);
+  const preview = await previewPlan(db, source, choices, ids.admin);
+  assert.equal(preview.problems[0].code, 'phone_match_requires_explicit_identity_resolution');
+  await assert.rejects(importPlan(db, source, choices, ids.admin, { dryRun: false }), /конфликт/);
+  assert.equal(Number((await db.query('SELECT count(*) FROM recruitment_candidates WHERE phone=$1', ['+79995550301'])).rows[0].count), 1);
+
+  const second = row(303, '+79995550302', { sourceKey: 'Наемные авто:303', sheet: 'Наемные авто' });
+  const batchChoices = resolution({ 'Свои авто:302': decision(), 'Наемные авто:303': decision() }, ids, {
+    targets: { 'Свои авто': { responsibilityScopeId: ids.scope, kind: 'driver' }, 'Наемные авто': { responsibilityScopeId: peerScope, kind: 'driver' } } });
+  const batchPreview = await previewPlan(db, batch([row(302, '+79995550302'), second]), batchChoices, ids.admin);
+  assert.equal(batchPreview.problemCount, 1);
+  assert.equal(batchPreview.problems[0].code, 'phone_match_requires_explicit_identity_resolution');
+  const foreignChoices = resolution({ 'Свои авто:301': decision() }, { ...ids, scope: foreignScope });
+  assert.equal((await importPlan(db, source, foreignChoices, ids.admin, { dryRun: false })).createdCandidates, 1);
+
+  const concurrentSource = batch([row(304, '+79995550304')]);
+  const concurrentChoices = resolution({ 'Свои авто:304': decision() }, { ...ids, scope: peerScope });
+  const holder = await db.connect();
+  let jobs;
+  try {
+    await holder.query('BEGIN');
+    await holder.query('SELECT pg_advisory_xact_lock(hashtextextended($1,917042025))', [`recruitment-company:${ids.legal}`]);
+    jobs = Promise.allSettled([importPlan(db, concurrentSource, concurrentChoices, ids.admin, { dryRun: false }), create('+79995550304')]);
+    const deadline = Date.now() + 10000;
+    let waiters = 0;
+    while (Date.now() < deadline) {
+      waiters = Number((await db.query(`SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
+        AND wait_event='advisory' AND query LIKE '%hashtextextended($1,917042025)%'`)).rows[0].count);
+      if (waiters >= 2) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(waiters, 2, 'API and importer must both wait on the company lock');
+  } finally { await holder.query('ROLLBACK'); holder.release(); }
+  const [imported, api] = await jobs;
+  assert.equal(api.status, 'fulfilled');
+  assert.ok([200, 409].includes(api.value.status), JSON.stringify(api));
+  if (imported.status === 'rejected') assert.match(imported.reason.message, /конфликт/);
+  else assert.equal(imported.value.createdCandidates, 1);
+  assert.equal((imported.status === 'fulfilled' ? 1 : 0) + (api.value.status === 200 ? 1 : 0), 1);
+  assert.equal(Number((await db.query('SELECT count(*) FROM recruitment_candidates WHERE legal_entity_id=$1 AND phone=$2', [ids.legal, '+79995550304'])).rows[0].count), 1);
+});
+
 test('candidate import compiles only explicitly reviewed records without invented history', () => {
   const ids = { scope: randomUUID(), admin: randomUUID() };
   const malformed = row(4, null, { proposed: { fullName: null, phone: null, city: null, occurredAt: null }, issues: ['invalid_phone', 'invalid_fullName', 'invalid_city'] });
