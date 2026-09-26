@@ -8,7 +8,7 @@ source /etc/os-release
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl gnupg nginx python3 python3-venv sudo rsync build-essential
+apt-get install -y ca-certificates curl gnupg nginx python3 python3-venv sudo rsync build-essential git
 install -d -m 0755 /etc/apt/keyrings
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf -- "$TEMP_DIR"' EXIT
@@ -39,6 +39,7 @@ install -d -o ecl-app -g ecl-app -m 0700 /var/lib/ecl/onboarding-photos
 install -d -o ecl-build -g ecl-build -m 0700 /var/cache/ecl-build
 install -d -o ecl-migrate -g ecl-migrate -m 0700 /var/lib/ecl/migration-backups
 install -d -o ecl-deploy -g ecl-deploy -m 0700 /home/ecl-deploy/.ssh /home/ecl-deploy/incoming
+install -d -o ecl-deploy -g ecl-deploy -m 0700 /var/lib/ecl/pull-update /var/cache/ecl-pull
 install -o root -g root -m 0755 "$HERE/deploy.py" /usr/local/sbin/ecl-deploy
 install -o root -g root -m 0755 "$HERE/configure-nginx.py" /usr/local/sbin/ecl-configure-nginx
 install -o root -g root -m 0644 "$HERE/backup.cjs" /usr/local/lib/ecl/backup.cjs
@@ -46,6 +47,9 @@ install -o root -g root -m 0644 "$HERE/ecl-app.service" /etc/systemd/system/ecl-
 install -o root -g root -m 0755 "$HERE/reload-nginx.sh" /usr/local/lib/ecl/reload-nginx.sh
 install -o root -g root -m 0644 "$HERE/ecl-certbot-renew.service" /etc/systemd/system/ecl-certbot-renew.service
 install -o root -g root -m 0644 "$HERE/ecl-certbot-renew.timer" /etc/systemd/system/ecl-certbot-renew.timer
+install -o root -g root -m 0644 "$HERE/pull-update.py" /usr/local/lib/ecl/pull-update.py
+install -o root -g root -m 0644 "$HERE/ecl-pull-update.service" /etc/systemd/system/ecl-pull-update.service
+install -o root -g root -m 0644 "$HERE/ecl-pull-update.timer" /etc/systemd/system/ecl-pull-update.timer
 # Only this validated entry point is privileged; no shell, systemctl, or sudo ALL.
 echo 'ecl-deploy ALL=(root) NOPASSWD: /usr/local/sbin/ecl-deploy' > "$TEMP_DIR/sudoers"
 visudo -cf "$TEMP_DIR/sudoers"
@@ -53,4 +57,5 @@ install -o root -g root -m 0440 "$TEMP_DIR/sudoers" /etc/sudoers.d/ecl-deploy
 systemctl daemon-reload
 systemctl enable ecl-app.service
 systemctl enable --now ecl-certbot-renew.timer
+# Pull deployment is optional and stays disabled until the first reviewed launch.
 echo 'Bootstrap complete. Install the deploy public SSH key and root-only app.env / migration.env; see docs/VK_CLOUD_DEPLOYMENT.md.'

@@ -1,0 +1,16 @@
+[Unit]
+Description=Pull the latest checked ECL main from public GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=ecl-deploy
+Group=ecl-deploy
+ExecStart=/usr/bin/python3 -I /usr/local/lib/ecl/pull-update.py
+TimeoutStartSec=150min
+UMask=0077
+PrivateTmp=true
+# sudo invokes only /usr/local/sbin/ecl-deploy, as restricted by bootstrap sudoers.
+# NoNewPrivileges/ProtectSystem would also restrict that required root helper.
+# No DB environment files or GitHub tokens are loaded into this service.
