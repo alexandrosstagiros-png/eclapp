@@ -45,6 +45,9 @@ jobs:
       - name: Verify production bootstrap with disposable PostgreSQL
         run: node --test ../tests/production-bootstrap.test.cjs
 
+      - name: Verify managed PostgreSQL role migrations
+        run: node --test ../tests/external-role-migration.test.cjs
+
       - name: Verify VK Cloud deployment safety checks
         run: python3 -m unittest discover -s ../deploy/vk-cloud -p 'test_*.py' -v
 

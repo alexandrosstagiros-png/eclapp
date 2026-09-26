@@ -2,6 +2,46 @@ const { readdirSync, readFileSync } = require("node:fs");
 const { createHash } = require("node:crypto");
 const { Pool } = require("pg");
 
+class MigrationSetupError extends Error {}
+
+function applicationConnectionString(migrationUrl, password) {
+  let url;
+  try { url = new URL(migrationUrl); }
+  catch { throw new MigrationSetupError("Invalid migration database URL."); }
+  if (!["postgres:", "postgresql:"].includes(url.protocol))
+    throw new MigrationSetupError("Invalid migration database URL protocol.");
+  url.username = "transport_app";
+  // URL setters do not escape literal percent signs; encode once so pg's URL
+  // parser decodes every valid password byte exactly once, including %, :, @.
+  url.password = encodeURIComponent(password);
+  // pg accepts these query parameters ahead of URL userinfo. They must never
+  // turn this credential probe back into a connection as the migration owner.
+  url.searchParams.delete("user");
+  url.searchParams.delete("password");
+  return url.href;
+}
+
+async function validateExternalApplicationRole(client, migrationUrl, password) {
+  const role = (await client.query(`SELECT rolcanlogin,rolsuper,rolcreatedb,rolcreaterole,rolbypassrls
+    FROM pg_roles WHERE rolname='transport_app'`)).rows[0];
+  if (!role) throw new MigrationSetupError("External role management requires a pre-created transport_app role.");
+  if (!role.rolcanlogin || role.rolsuper || role.rolcreatedb || role.rolcreaterole || role.rolbypassrls)
+    throw new MigrationSetupError("The external transport_app role must allow LOGIN without elevated database privileges.");
+  const expectedDatabase = (await client.query("SELECT current_database() AS name")).rows[0].name;
+  const probe = new Pool({ connectionString: applicationConnectionString(migrationUrl, password), max: 1,
+    connectionTimeoutMillis: 5000, statement_timeout: 5000 });
+  try {
+    const current = (await probe.query("SELECT current_user AS role,current_database() AS name")).rows[0];
+    if (current.role !== "transport_app" || current.name !== expectedDatabase)
+      throw new MigrationSetupError("External application credentials do not connect as transport_app to the migration database.");
+  } catch (error) {
+    if (error instanceof MigrationSetupError) throw error;
+    throw new MigrationSetupError("Cannot authenticate the external transport_app role; check APP_DB_PASSWORD, database access and TLS settings.");
+  } finally {
+    await probe.end();
+  }
+}
+
 async function migrate() {
   if (
     !process.env.MIGRATION_DATABASE_URL ||
@@ -9,19 +49,26 @@ async function migrate() {
     process.env.APP_DB_PASSWORD.length < 20
   )
     throw new Error("Migration credentials are required");
+  const roleManagement = process.env.APP_DB_ROLE_MANAGEMENT ?? "internal";
+  if (!["internal", "external"].includes(roleManagement))
+    throw new MigrationSetupError("APP_DB_ROLE_MANAGEMENT must be internal or external.");
   const pool = new Pool({
     connectionString: process.env.MIGRATION_DATABASE_URL,
   });
   const client = await pool.connect();
   try {
     await client.query("SELECT pg_advisory_lock(917042001)");
+    // Managed services can provision roles outside SQL. Verify the actual login
+    // and its privilege flags before CREATE TABLE or any application migration.
+    if (roleManagement === "external")
+      await validateExternalApplicationRole(client, process.env.MIGRATION_DATABASE_URL, process.env.APP_DB_PASSWORD);
     await client.query(
       "CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())",
     );
     // MAX migration grants its additive table to the runtime role. Create the
     // restricted role before migrations; assign its password after they succeed.
     const runtimeRole = await client.query("SELECT 1 FROM pg_roles WHERE rolname='transport_app'");
-    if (!runtimeRole.rowCount)
+    if (!runtimeRole.rowCount && roleManagement === "internal")
       await client.query("CREATE ROLE transport_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT");
     for (const file of readdirSync("infra/db/migrations")
       .filter((n) => n.endsWith(".sql"))
@@ -54,18 +101,20 @@ async function migrate() {
     }
     await client.query("BEGIN");
     try {
-      const exists = await client.query(
-        "SELECT 1 FROM pg_roles WHERE rolname='transport_app'",
-      );
-      if (!exists.rowCount)
-        await client.query(
-          "CREATE ROLE transport_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT",
+      if (roleManagement === "internal") {
+        const exists = await client.query(
+          "SELECT 1 FROM pg_roles WHERE rolname='transport_app'",
         );
-      const formatted = await client.query(
-        "SELECT format('ALTER ROLE transport_app PASSWORD %L', $1::text) AS sql",
-        [process.env.APP_DB_PASSWORD],
-      );
-      await client.query(formatted.rows[0].sql);
+        if (!exists.rowCount)
+          await client.query(
+            "CREATE ROLE transport_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT",
+          );
+        const formatted = await client.query(
+          "SELECT format('ALTER ROLE transport_app PASSWORD %L', $1::text) AS sql",
+          [process.env.APP_DB_PASSWORD],
+        );
+        await client.query(formatted.rows[0].sql);
+      }
       await client.query(`GRANT USAGE ON SCHEMA public TO transport_app;
         GRANT SELECT ON legal_entities,regions,projects,responsibility_scopes,vehicles,trips,trip_assignments,trip_stops TO transport_app;
         REVOKE ALL ON users,access_grants,sessions,channel_identities,invitations,auth_replays FROM transport_app;
@@ -120,10 +169,10 @@ async function migrate() {
   }
 }
 if (require.main === module)
-  migrate().catch(() => {
+  migrate().catch(error => {
     console.error(
-      "Migration failed. Check database availability, credentials and migration checksums.",
+      error instanceof MigrationSetupError ? error.message : "Migration failed. Check database availability, credentials and migration checksums.",
     );
     process.exitCode = 1;
   });
-module.exports = { migrate };
+module.exports = { migrate, applicationConnectionString };
