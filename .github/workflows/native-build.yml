@@ -170,7 +170,7 @@ jobs:
           npm run ios:init -- --ci --skip-targets-install
           if [ "$(uname -m)" = arm64 ]; then
             ios_target=aarch64-sim
-            ios_arch=arm64
+            ios_arch=arm64-sim
           else
             ios_target=x86_64
             ios_arch=x86_64

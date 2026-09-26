@@ -21,6 +21,10 @@ concurrency:
 jobs:
   preflight:
     runs-on: ubuntu-latest
+    # GitHub only includes drafts in release listings for callers with push access.
+    # This job remains read-only; the permission makes retry validation complete.
+    permissions:
+      contents: write
     outputs:
       tag: ${{ steps.check.outputs.tag }}
       repository: ${{ steps.check.outputs.repository }}
@@ -76,13 +80,17 @@ jobs:
               if (compareVersions(version, latest.tag_name) <= 0) throw new Error('Release version must be newer than the published latest release.');
             } catch (error) { if (error.status !== 404) throw error; }
             const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-            try {
-              const { data: existing } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+            // The by-tag endpoint only returns published releases, including for owners.
+            const matches = (await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 }))
+              .filter((release) => release.tag_name === tag);
+            if (matches.length > 1) throw new Error('Multiple releases use this tag; review the drafts before retrying.');
+            const existing = matches[0];
+            if (existing) {
               if (!existing.draft) throw new Error('Published releases are immutable: use a new version tag.');
               if (!existing.body?.includes(`Source: ${context.repo.owner}/${context.repo.repo}@${sourceSha}`)) {
                 throw new Error('Existing draft was created from a different source commit; review it before retrying.');
               }
-            } catch (error) { if (error.status !== 404) throw error; }
+            }
             core.setOutput('tag', tag);
             core.setOutput('repository', repository);
             core.setOutput('source_sha', sourceSha);
@@ -299,9 +307,11 @@ jobs:
               const { data: latest } = await github.rest.repos.getLatestRelease({ owner, repo });
               if (compareVersions(version, latest.tag_name) <= 0) throw new Error('A newer or equal version is already published.');
             } catch (error) { if (error.status !== 404) throw error; }
-            let release;
-            try { release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data; }
-            catch (error) { if (error.status !== 404) throw error; }
+            // List releases also finds an interrupted upload's draft; by-tag returns 404 for it.
+            const matches = (await github.paginate(github.rest.repos.listReleases, { owner, repo, per_page: 100 }))
+              .filter((release) => release.tag_name === tag);
+            if (matches.length > 1) throw new Error('Multiple releases use this tag; review the drafts before retrying.');
+            let release = matches[0];
             if (release && (!release.draft || !release.body?.includes(source))) throw new Error('Refusing to overwrite an existing published or unrelated release.');
             if (!release) {
               release = (await github.rest.repos.createRelease({ owner, repo, tag_name: tag,

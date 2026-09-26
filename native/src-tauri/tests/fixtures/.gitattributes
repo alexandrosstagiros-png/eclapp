@@ -1,0 +1,2 @@
+# This payload is cryptographically signed; its bytes must survive every checkout.
+updater-payload.txt -text
