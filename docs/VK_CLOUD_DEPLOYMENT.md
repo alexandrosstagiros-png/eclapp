@@ -176,14 +176,24 @@ sudo bash deploy/vk-cloud/bootstrap.sh
 ```sh
 sudo systemctl stop ecl-app
 sudo systemd-run --unit=ecl-production-bootstrap --wait --pipe --collect \
+  --expand-environment=no \
   --property=User=ecl-migrate --property=Group=ecl-migrate \
   --property=WorkingDirectory=/opt/ecl/current/recovered \
   --property=EnvironmentFile=/etc/ecl/migration.env \
   --property=LoadCredential=bootstrap.json:/etc/ecl/bootstrap.json \
   --property=NoNewPrivileges=yes --property=ProtectSystem=strict \
-  /usr/bin/node scripts/bootstrap-production.cjs \
-  --config /run/credentials/ecl-production-bootstrap.service/bootstrap.json
+  --property=PrivateTmp=yes --property=UMask=0077 \
+  /bin/sh -ec '
+    bootstrap_file=$(mktemp /tmp/ecl-bootstrap.XXXXXX)
+    trap "rm -f -- \"$bootstrap_file\"" EXIT
+    install -m 0600 "$CREDENTIALS_DIRECTORY/bootstrap.json" "$bootstrap_file"
+    /usr/bin/node scripts/bootstrap-production.cjs --config "$bootstrap_file"
+  '
 ```
+
+`LoadCredential` может предоставлять файл с режимом `0440` и доступом через ACL,
+поэтому команда создаёт отдельную копию `0600` в приватном временном каталоге
+службы и удаляет её при завершении, сохраняя строгую проверку bootstrap-файла.
 
 Сценарий требует пустую полностью мигрированную базу и создаёт организацию,
 область доступа и одного администратора атомарно. Он не печатает пароль и не
@@ -266,6 +276,13 @@ curl --fail https://app.example.com/api/v1/health/ready
 
 ## Обновления из GitHub
 
+Есть два способа автоматической доставки: GitHub Actions подключается к ВМ
+по SSH либо ВМ сама забирает проверенный код по HTTPS. Если входящее SSH
+соединение из GitHub недоступно, используйте описанный ниже **опрос с ВМ**.
+Для одной ВМ включайте один способ автоматической доставки.
+
+### Доставка из GitHub Actions по SSH
+
 Создайте отдельную SSH-пару для деплоя. Добавьте публичную часть в
 `/home/ecl-deploy/.ssh/authorized_keys` с владельцем `ecl-deploy`, правами `0600`
 и префиксом `restrict`, отключающим forwarding, PTY и пользовательский rc-файл.
@@ -317,6 +334,64 @@ GitHub может заменить ожидающий запуск более н
 администратор должен сначала проверить причину сбоя и состояние миграций,
 затем убрать только неактивный неудачный выпуск перед повторной попыткой.
 Не удаляйте каталог текущей или предыдущей рабочей версии.
+
+### Опрос GitHub с ВМ, когда входящий SSH из GitHub недоступен
+
+Сценарий `deploy/vk-cloud/pull-update.py` обращается к фиксированному публичному
+репозиторию `alexandrosstagiros-png/eclapp` по исходящему HTTPS. Токены GitHub,
+SSH-ключ деплоя в Actions и дополнительные входящие порты для этого способа
+не требуются. Приватизация репозитория потребует отдельной настройки: текущий
+сценарий рассчитан на публичный доступ и не пытается использовать личные токены.
+
+Bootstrap устанавливает сценарий с владельцем root, `git` и два systemd-unit:
+`ecl-pull-update.service` и `ecl-pull-update.timer`. **Таймер не включается
+автоматически.** После первого проверенного запуска сервера и успешного CI
+для актуального `main` оставьте `VK_DEPLOY_ENABLED` выключенным и выполните:
+
+```sh
+sudo systemctl start ecl-pull-update.service
+sudo journalctl -u ecl-pull-update.service --no-pager -n 40
+sudo systemctl enable --now ecl-pull-update.timer
+systemctl list-timers ecl-pull-update.timer
+```
+
+Сервис запускается как `ecl-deploy`, без файлов окружения БД. Он получает
+текущий SHA `main`, проверяет последний push CI именно этого SHA в исходном
+репозитории, скачивает Git-объект по HTTPS и сверяет его идентификатор.
+`git archive` упаковывает отслеживаемый код целиком. Перед установкой сервис
+повторно проверяет `main`, чтобы пропустить устаревший выпуск, и вызывает
+существующий ограниченный `sudo /usr/local/sbin/ecl-deploy`. Сборка и миграции
+по-прежнему выполняются отдельными системными пользователями.
+
+Проверка происходит примерно каждые пять минут после окончания предыдущей.
+Успешный SHA записывается в `/var/lib/ecl/pull-update/state.json` только после
+проверки текущего выпуска и readiness. Пока этот SHA остаётся текущим и
+здоровым, архив повторно не загружается и сборка не запускается: нужна только
+одна API-проверка `main`. Обычная проверка нового выпуска использует максимум
+три API-запроса, то есть до 36 в час при таком расписании, без токена GitHub.
+
+Ошибки API или установки приводят к неуспешному статусу сервиса и повторным
+попыткам с интервалом 5, 10, 20, 40 и затем 60 минут. Ответ об исчерпании
+лимита API может увеличить ожидание. Новый commit `main` проверяется даже
+при отложенной повторной попытке предыдущего выпуска. Каталоги неудачных
+выпусков сценарий не удаляет: для повторного выпуска того же SHA может
+потребоваться проверка администратором, как описано выше.
+
+Git-кэш находится в `/var/cache/ecl-pull`, временный архив — в
+`/home/ecl-deploy/incoming`. Эти каталоги принадлежат `ecl-deploy`; рабочие
+секреты остаются в `/etc/ecl`. Изменение самого updater и unit-файлов требует
+проверки и установки администратором, обычный pull-выпуск их не заменяет.
+Настройте оповещение на неуспешный `ecl-pull-update.service`, чтобы заметить
+ошибку обновления при продолжающей работать старой версии.
+
+Чтобы остановить опрос:
+
+```sh
+sudo systemctl disable --now ecl-pull-update.timer
+```
+
+Это останавливает будущие проверки; уже начавшийся выпуск следует дождаться,
+чтобы не прерывать миграции. Ручная доставка ниже остаётся доступной.
 
 ## Ручная доставка при недоступном SSH из GitHub
 
