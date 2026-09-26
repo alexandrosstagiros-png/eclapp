@@ -1,0 +1,325 @@
+name: Publish native updates
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable source tag, for example v0.2.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Never cancel an upload or let an older concurrent build replace the latest release.
+concurrency:
+  group: native-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      repository: ${{ steps.check.outputs.repository }}
+      source_sha: ${{ steps.check.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Validate release channel and credentials
+        id: check
+        uses: actions/github-script@v8
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+          NATIVE_RELEASE_REPOSITORY: ${{ vars.NATIVE_RELEASE_REPOSITORY }}
+          NATIVE_RELEASE_TOKEN: ${{ secrets.NATIVE_RELEASE_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          NATIVE_ANDROID_RELEASE_ENABLED: ${{ vars.NATIVE_ANDROID_RELEASE_ENABLED }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        with:
+          github-token: ${{ secrets.NATIVE_RELEASE_TOKEN || github.token }}
+          script: |
+            const fs = require('node:fs');
+            const { execFileSync } = require('node:child_process');
+            const { versionFromTag, compareVersions } = require('./native/scripts/release-version.cjs');
+            const { releaseRepository, signingKeyId } = require('./native/scripts/release-artifacts.cjs');
+            const tag = process.env.RELEASE_TAG;
+            const version = versionFromTag(tag);
+            const channel = JSON.parse(fs.readFileSync('native/update-channel.json', 'utf8'));
+            const repository = releaseRepository(process.env.NATIVE_RELEASE_REPOSITORY || channel.repository);
+            const [owner, repo] = repository.split('/');
+            if (repository !== `${context.repo.owner}/${context.repo.repo}` && !process.env.NATIVE_RELEASE_TOKEN) {
+              throw new Error('A separate assets repository requires NATIVE_RELEASE_TOKEN with Contents: write on that repository.');
+            }
+            if (!process.env.TAURI_SIGNING_PRIVATE_KEY) throw new Error('Set TAURI_SIGNING_PRIVATE_KEY before publishing updates.');
+            const config = JSON.parse(fs.readFileSync('native/src-tauri/tauri.conf.json', 'utf8'));
+            signingKeyId(config.plugins?.updater?.pubkey || '');
+            if (process.env.NATIVE_ANDROID_RELEASE_ENABLED === 'true') {
+              for (const name of ['ANDROID_KEYSTORE_BASE64', 'ANDROID_KEYSTORE_PASSWORD', 'ANDROID_KEY_ALIAS', 'ANDROID_KEY_PASSWORD']) {
+                if (!process.env[name]) throw new Error(`Missing release secret: ${name}`);
+              }
+            }
+            const { data: destination } = await github.rest.repos.get({ owner, repo });
+            if (destination.private) throw new Error('The release repository must be publicly readable. Do not put GitHub tokens in the app.');
+            try {
+              const { data: latest } = await github.rest.repos.getLatestRelease({ owner, repo });
+              if (compareVersions(version, latest.tag_name) <= 0) throw new Error('Release version must be newer than the published latest release.');
+            } catch (error) { if (error.status !== 404) throw error; }
+            const sourceSha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+            try {
+              const { data: existing } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+              if (!existing.draft) throw new Error('Published releases are immutable: use a new version tag.');
+              if (!existing.body?.includes(`Source: ${context.repo.owner}/${context.repo.repo}@${sourceSha}`)) {
+                throw new Error('Existing draft was created from a different source commit; review it before retrying.');
+              }
+            } catch (error) { if (error.status !== 404) throw error; }
+            core.setOutput('tag', tag);
+            core.setOutput('repository', repository);
+            core.setOutput('source_sha', sourceSha);
+
+  desktop:
+    needs: preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: --target universal-apple-darwin --bundles app,dmg
+          - platform: windows
+            os: windows-latest
+            targets: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --bundles nsis
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: native
+    env:
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      NATIVE_RELEASE_REPOSITORY: ${{ needs.preflight.outputs.repository }}
+      NATIVE_IOS_STORE_URL: ${{ vars.NATIVE_IOS_STORE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/package-lock.json
+            recovered/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+      - run: npm ci --prefix ../recovered
+      - run: npm ci
+      - name: Set the tag version and release endpoint
+        shell: bash
+        run: node scripts/prepare-release.cjs "$RELEASE_TAG"
+      - run: npm test
+      - run: npm run prepare:web
+      - run: cargo test --locked --workspace
+      - name: Import optional Apple distribution certificate
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then exit 0; fi
+          if [ -z "$APPLE_CERTIFICATE_PASSWORD" ] || [ -z "$KEYCHAIN_PASSWORD" ]; then
+            echo 'APPLE_CERTIFICATE_PASSWORD and KEYCHAIN_PASSWORD are required with APPLE_CERTIFICATE.'
+            exit 1
+          fi
+          node -e 'require("node:fs").writeFileSync(process.env.RUNNER_TEMP + "/ecl-certificate.p12", Buffer.from(process.env.APPLE_CERTIFICATE, "base64"), {mode: 0o600})'
+          trap 'rm -f "$RUNNER_TEMP/ecl-certificate.p12"' EXIT
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/ecl-build.keychain-db"
+          security set-keychain-settings -lut 21600 "$RUNNER_TEMP/ecl-build.keychain-db"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/ecl-build.keychain-db"
+          security import "$RUNNER_TEMP/ecl-certificate.p12" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$RUNNER_TEMP/ecl-build.keychain-db"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$RUNNER_TEMP/ecl-build.keychain-db"
+          security list-keychains -d user -s "$RUNNER_TEMP/ecl-build.keychain-db" "$HOME/Library/Keychains/login.keychain-db"
+      - name: Build and sign updater artifacts
+        run: npm run build -- --ci --config artifacts/release-config.json ${{ matrix.args }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Ad-hoc app signing is a fallback; trusted public distribution needs Apple credentials.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - name: Collect complete signed bundles
+        shell: bash
+        run: node scripts/release-artifacts.cjs collect '${{ matrix.platform }}' "$RELEASE_TAG"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: native/artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Remove temporary Apple keychain
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          if [ -f "$RUNNER_TEMP/ecl-build.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/ecl-build.keychain-db"
+          fi
+
+  android:
+    if: vars.NATIVE_ANDROID_RELEASE_ENABLED == 'true'
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: native
+    env:
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      NATIVE_RELEASE_REPOSITORY: ${{ needs.preflight.outputs.repository }}
+      NATIVE_IOS_STORE_URL: ${{ vars.NATIVE_IOS_STORE_URL }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/package-lock.json
+            recovered/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+      - run: npm ci --prefix ../recovered
+      - run: npm ci
+      - name: Set the tag version and release endpoint
+        run: node scripts/prepare-release.cjs "$RELEASE_TAG"
+      - name: Build arm64 release APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run android:init -- --ci --skip-targets-install
+          npm run android:build -- --ci --apk --target aarch64 --config artifacts/release-config.json
+      - name: Sign the final aligned APK
+        run: node scripts/sign-android-release.cjs "$RELEASE_TAG"
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-android
+          path: native/artifacts/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: [preflight, desktop, android]
+    if: >-
+      always() && needs.preflight.result == 'success' && needs.desktop.result == 'success' &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      NATIVE_RELEASE_REPOSITORY: ${{ needs.preflight.outputs.repository }}
+      NATIVE_ANDROID_RELEASE_ENABLED: ${{ vars.NATIVE_ANDROID_RELEASE_ENABLED }}
+      NATIVE_IOS_STORE_URL: ${{ vars.NATIVE_IOS_STORE_URL }}
+      NATIVE_IOS_VERSION: ${{ vars.NATIVE_IOS_VERSION }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.preflight.outputs.source_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: native/artifacts/release
+          merge-multiple: true
+      - name: Validate every platform and create the common manifest
+        run: node native/scripts/release-artifacts.cjs manifest native/artifacts/release "$RELEASE_TAG"
+      - name: Upload a draft, verify completeness, then publish
+        uses: actions/github-script@v8
+        env:
+          SOURCE_SHA: ${{ needs.preflight.outputs.source_sha }}
+        with:
+          github-token: ${{ secrets.NATIVE_RELEASE_TOKEN || github.token }}
+          script: |
+            const fs = require('node:fs');
+            const path = require('node:path');
+            const { versionFromTag, compareVersions } = require('./native/scripts/release-version.cjs');
+            const [owner, repo] = process.env.NATIVE_RELEASE_REPOSITORY.split('/');
+            const tag = process.env.RELEASE_TAG;
+            const version = versionFromTag(tag);
+            const source = `Source: ${context.repo.owner}/${context.repo.repo}@${process.env.SOURCE_SHA}`;
+            const { data: destination } = await github.rest.repos.get({ owner, repo });
+            if (destination.private) throw new Error('Public update downloads are unavailable from a private repository.');
+            try {
+              const { data: latest } = await github.rest.repos.getLatestRelease({ owner, repo });
+              if (compareVersions(version, latest.tag_name) <= 0) throw new Error('A newer or equal version is already published.');
+            } catch (error) { if (error.status !== 404) throw error; }
+            let release;
+            try { release = (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data; }
+            catch (error) { if (error.status !== 404) throw error; }
+            if (release && (!release.draft || !release.body?.includes(source))) throw new Error('Refusing to overwrite an existing published or unrelated release.');
+            if (!release) {
+              release = (await github.rest.repos.createRelease({ owner, repo, tag_name: tag,
+                name: `ЕЦЛ ${version}`, draft: true, prerelease: false,
+                body: `Обновление приложений ЕЦЛ.\n\n${source}\n\nПодписи обновлений: Tauri/minisign. Контрольные суммы: SHA256SUMS.txt.` })).data;
+            }
+            const directory = 'native/artifacts/release';
+            const files = fs.readdirSync(directory).sort();
+            const existing = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id });
+            for (const asset of existing) {
+              await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: asset.id });
+            }
+            for (const name of files) {
+              const data = fs.readFileSync(path.join(directory, name));
+              await github.rest.repos.uploadReleaseAsset({ owner, repo, release_id: release.id, name, data,
+                headers: { 'content-type': 'application/octet-stream', 'content-length': data.length } });
+            }
+            const uploaded = await github.paginate(github.rest.repos.listReleaseAssets, { owner, repo, release_id: release.id });
+            for (const name of files) {
+              const asset = uploaded.find((item) => item.name === name && item.state === 'uploaded');
+              if (!asset || asset.size !== fs.statSync(path.join(directory, name)).size) throw new Error(`Incomplete asset upload: ${name}`);
+            }
+            await github.rest.repos.updateRelease({ owner, repo, release_id: release.id, draft: false, make_latest: 'true' });
+            await core.summary.addLink(`ЕЦЛ ${version}`, release.html_url).write();

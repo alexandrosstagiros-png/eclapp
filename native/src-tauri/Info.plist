@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>NSCameraUsageDescription</key>
+  <string>ЕЦЛ использует камеру для фотографий документов и контрольных осмотров.</string>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>ЕЦЛ использует микрофон при записи голосовых и видеосообщений в переписке.</string>
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>ЕЦЛ подключается к локальному серверу вашей организации.</string>
+</dict></plist>

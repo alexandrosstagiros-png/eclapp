@@ -1,0 +1,92 @@
+:root { --native-bottom: calc(42px + env(safe-area-inset-bottom, 0px)); }
+html { min-height: 100%; -webkit-text-size-adjust: 100%; }
+body { padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) var(--native-bottom) env(safe-area-inset-left, 0px); }
+#root { min-height: calc(100dvh - var(--native-bottom) - env(safe-area-inset-top, 0px)); }
+#native-shell { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text, #192a39); }
+.native-bar { position: fixed; z-index: 900; bottom: 0; inset-inline: 0; display: flex; gap: 12px; align-items: center; justify-content: space-between; min-height: var(--native-bottom); padding: 0 max(18px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(18px, env(safe-area-inset-left, 0px)); border-top: 1px solid var(--line, #d5dce2); background: var(--surface, #fff); color: var(--muted, #566977); font-size: 12px; }
+.native-connection { display: inline-flex; align-items: center; gap: 8px; }
+.native-connection { min-width: 0; margin-right: auto; }
+.native-connection::before { flex-shrink: 0; }
+.native-settings { flex-shrink: 0; }
+.native-updates-trigger { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; border-radius: 6px; padding: 6px 9px; background: transparent; color: var(--blue, #214965); font: inherit; min-height: 32px; cursor: pointer; }
+.native-updates-trigger[data-state=ready], .native-updates-trigger[data-state=external] { background: #e9a935; border-color: #e5a128; color: #172b3c; font-weight: 650; }
+.native-updates-trigger[data-state=ready]::before, .native-updates-trigger[data-state=external]::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.native-updates-trigger:focus-visible, .native-updates-close:focus-visible { outline: 3px solid var(--orange, #edaa32); outline-offset: 3px; }
+.native-updates-panel { position: fixed; z-index: 1000; right: max(14px, env(safe-area-inset-right, 0px)); bottom: calc(var(--native-bottom) + 10px); box-sizing: border-box; width: min(390px, calc(100vw - 28px)); max-height: calc(100dvh - var(--native-bottom) - 30px - env(safe-area-inset-top, 0px)); overflow: auto; border: 1px solid var(--line, #d5dce2); border-radius: 14px; padding: 18px; background: var(--surface, #fff); box-shadow: 0 8px 40px #07192930; }
+.native-updates-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.native-updates-header h2 { margin: 0; font-size: 17px; color: var(--text, #192a39); }
+.native-updates-close { width: 32px; height: 32px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted, #566977); font: inherit; font-size: 24px; cursor: pointer; }
+.native-updates-version { margin: 2px 0 20px; color: var(--muted, #566977); font-size: 11px; }
+.native-updates-heading { margin: 0 0 8px; font-size: 14px; line-height: 1.5; overflow-wrap: anywhere; }
+.native-updates-detail { margin: 0 0 16px; font-size: 13px; line-height: 1.6; color: var(--muted, #566977); overflow-wrap: anywhere; }
+.native-updates-progress { width: 100%; height: 8px; margin: 0 0 18px; accent-color: #e9a935; }
+.native-updates-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.native-updates-actions .native-button { flex: 1 1 auto; }
+.native-update-confirm { box-sizing: border-box; width: min(460px, calc(100vw - 28px)); max-height: calc(100dvh - 40px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); overflow: auto; padding: 24px; border: 1px solid var(--line, #d5dce2); border-radius: 14px; background: var(--surface, #fff); color: var(--text, #192a39); box-shadow: 0 20px 100px #07192933; }
+.native-update-confirm::backdrop { background: #10233180; }
+.native-update-confirm h2 { margin: 0 0 12px; font-size: 20px; }
+.native-update-confirm p { font-size: 14px; line-height: 1.7; margin: 0 0 22px; color: var(--muted, #566977); }
+.native-updates-panel[hidden], .native-updates-actions [hidden], .native-updates-progress[hidden] { display: none; }
+.native-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+.native-connection::before { content: ''; width: 7px; height: 7px; border-radius: 50%; background: #aa7940; }
+.native-connection[data-state=online]::before { background: #25866e; }
+.native-connection[data-state=offline]::before, .native-connection[data-state=degraded]::before { background: #c16a42; }
+.native-settings { border: 0; background: transparent; font: inherit; color: var(--blue, #214965); padding: 10px 0 10px 14px; cursor: pointer; min-height: 42px; }
+.native-settings:focus-visible, .native-button:focus-visible, .native-input:focus-visible { outline: 3px solid var(--orange, #edaa32); outline-offset: 3px; }
+.native-toast { position: fixed; z-index: 2000; bottom: calc(var(--native-bottom) + 16px); left: 50%; transform: translateX(-50%); width: min(560px, calc(100vw - 32px)); padding: 15px 20px; border-radius: 12px; border: 1px solid var(--line, #d5dce2); box-shadow: 0 6px 24px #0002; background: var(--surface, #fff); color: var(--text, #192a39); font-size: 14px; line-height: 1.55; }
+.native-connect { padding: 0; width: min(960px, calc(100vw - 56px)); max-height: calc(100dvh - 72px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); border: 1px solid var(--line, #d5dce2); border-radius: 20px; color: var(--text, #192a39); background: var(--surface, #fff); overflow: auto; box-shadow: 0 20px 100px #07192933; }
+.native-connect[open] { display: grid; grid-template-columns: .94fr 1.06fr; }
+.native-connect::backdrop { background: #10233180; backdrop-filter: blur(6px); }
+.native-first-run::backdrop { background: var(--canvas, #e8edf1); }
+.native-connect-intro { display: flex; flex-direction: column; align-items: flex-start; background: #142e43; color: #f7fafc; padding: 42px 36px; border-bottom: 6px solid #e9a935; }
+.native-connect-logo { width: 166px; height: auto; padding: 9px; border-radius: 8px; background: #fff; }
+.native-connect-intro .native-eyebrow { margin: 56px 0 18px; font-size: 10px; font-weight: 650; letter-spacing: .16em; color: #bdd1df; }
+.native-connect-intro h1 { margin: 0 0 22px; font-size: clamp(26px, 3vw, 34px); line-height: 1.18; letter-spacing: -.045em; white-space: pre-line; }
+.native-connect-intro > p:not(.native-eyebrow) { margin: 0; font-size: 14px; line-height: 1.75; color: #bdd1df; }
+.native-connect-facts { margin-top: auto; padding-top: 42px; display: grid; gap: 14px; font-size: 12px; color: #d9e7f0; }
+.native-connect-facts span::before { content: '•'; margin-right: 12px; color: #e9a935; }
+.native-connect-form { display: flex; flex-direction: column; padding: 44px 38px 28px; }
+.native-connect-form h2 { margin: 0 0 12px; color: var(--navy, #142e43); font-size: 26px; letter-spacing: -.035em; }
+.native-muted { margin: 0 0 28px; font-size: 14px; line-height: 1.7; color: var(--muted, #566977); }
+.native-label { font-size: 13px; font-weight: 650; margin-bottom: 10px; }
+.native-input { box-sizing: border-box; width: 100%; min-height: 48px; padding: 12px 14px; color: var(--text, #192a39); background: var(--field-bg, #fff); border: 1px solid var(--blue-border, #aabdc9); border-radius: 8px; font-size: 16px; }
+.native-hint { font-size: 11px; color: var(--muted, #566977); line-height: 1.6; margin: 10px 0 20px; }
+.native-session-note { margin: 0 0 18px; padding: 13px 15px; border-radius: 8px; font-size: 12px; line-height: 1.65; background: var(--canvas, #edf2f5); color: var(--muted, #566977); }
+.native-error { margin: 0 0 18px; color: var(--danger-text, #a43b27); font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
+.native-error:empty { display: none; }
+.native-reset-label { display: flex; align-items: flex-start; gap: 10px; font-size: 12px; line-height: 1.6; margin-bottom: 18px; }
+.native-reset-label[hidden] { display: none; }
+.native-reset-label input { flex-shrink: 0; width: 18px; height: 18px; margin: 2px 0 0; accent-color: #bd852a; }
+.native-connect-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: auto; }
+.native-button { min-height: 46px; border-radius: 8px; padding: 12px 18px; font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+.native-primary { border: 1px solid #e5a128; background: #e9a935; color: #172b3c; flex: 1; }
+.native-primary:hover:enabled { background: #f0b647; }
+.native-secondary { border: 1px solid var(--line, #d5dce2); background: transparent; color: var(--text, #192a39); }
+.native-button:disabled { cursor: wait; opacity: .65; }
+.native-version { margin: 20px 0 0; text-align: center; color: var(--muted, #566977); font-size: 10px; letter-spacing: .06em; }
+.native-load-error { max-width: 560px; margin: 14vh auto; padding: 24px; font: 16px/1.7 -apple-system, BlinkMacSystemFont, sans-serif; }
+.phone-login-form .remember-device { display: none; }
+/* WebKit's native menulist ignores the shared control's padding and overlaps its icon. */
+.theme-switcher select { -webkit-appearance: none; appearance: none; }
+.theme-switcher::after { content: '⌄'; position: absolute; right: 10px; pointer-events: none; }
+@media (max-width: 700px) {
+  .topbar .account .theme-switcher::after { content: none; }
+  .native-connect { width: calc(100vw - 24px); max-height: calc(100dvh - 32px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)); border-radius: 16px; }
+  .native-connect[open] { grid-template-columns: 1fr; }
+  .native-connect-intro { padding: 24px; border-bottom-width: 4px; }
+  .native-connect-logo { width: 128px; }
+  .native-connect-intro .native-eyebrow { margin: 26px 0 12px; }
+  .native-connect-intro h1 { font-size: 27px; margin-bottom: 0; }
+  .native-connect-intro > p:not(.native-eyebrow), .native-connect-facts { display: none; }
+  .native-connect-form { padding: 26px 24px 22px; }
+  .native-connect-form h2 { font-size: 23px; }
+  .native-muted { font-size: 13px; margin-bottom: 22px; }
+  .native-bar { font-size: 11px; }
+  .native-bar { gap: 5px; padding-inline: max(10px, env(safe-area-inset-left, 0px)) max(10px, env(safe-area-inset-right, 0px)); }
+  .native-settings { padding-left: 4px; }
+  .native-connection { font-size: 10px; gap: 5px; }
+  .native-updates-trigger { padding-inline: 6px; }
+  button, a, input, select, textarea { touch-action: manipulation; }
+  input, select, textarea { scroll-margin-block: 90px; }
+}
+@media (prefers-reduced-motion: reduce) { .native-connect, .native-toast { scroll-behavior: auto; } }

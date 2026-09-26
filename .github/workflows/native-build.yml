@@ -1,0 +1,182 @@
+name: Native applications
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'native/**'
+      - 'recovered/apps/office-web/**'
+      - 'recovered/apps/driver-web/**'
+      - 'recovered/packages/web-shared/**'
+      - '.github/workflows/native-build.yml'
+
+# Build and retain test installers only. No GitHub Release or store publishing.
+permissions:
+  contents: read
+
+concurrency:
+  group: native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS universal
+            os: macos-latest
+            targets: aarch64-apple-darwin,x86_64-apple-darwin
+            build_args: --target universal-apple-darwin --bundles app,dmg
+            artifact: ECL-macOS-universal
+          - name: Windows x64
+            os: windows-latest
+            targets: x86_64-pc-windows-msvc
+            build_args: --target x86_64-pc-windows-msvc --bundles nsis
+            artifact: ECL-Windows-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/package-lock.json
+            recovered/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+      - run: npm ci --prefix ../recovered
+      - run: npm ci
+      - run: npm test
+      - run: npm run prepare:web
+      - run: cargo test --locked --workspace
+      - name: Build desktop bundles
+        run: npm run build -- --ci ${{ matrix.build_args }}
+        env:
+          # Ad-hoc signature enables local testing, not trusted distribution.
+          APPLE_SIGNING_IDENTITY: '-'
+      - name: Preserve macOS app executable bits
+        if: runner.os == 'macOS'
+        run: tar -czf ECL-macOS-universal.app.tar.gz -C target/universal-apple-darwin/release/bundle/macos ECL.app
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            native/ECL-macOS-universal.app.tar.gz
+            native/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 14
+          path: native/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+
+  android:
+    name: Android arm64 debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/package-lock.json
+            recovered/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK and NDK
+        run: sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+      - run: npm ci --prefix ../recovered
+      - run: npm ci
+      - name: Generate project and build APK
+        shell: bash
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run android:init -- --ci --skip-targets-install
+          npm run android:build -- --ci --debug --apk --target aarch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ECL-Android-arm64-debug
+          if-no-files-found: error
+          retention-days: 14
+          path: native/src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+
+  ios:
+    name: iOS Simulator
+    runs-on: macos-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            native/package-lock.json
+            recovered/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim,x86_64-apple-ios
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: native -> target
+      - name: Ensure CocoaPods
+        run: command -v pod >/dev/null || brew install cocoapods
+      - run: npm ci --prefix ../recovered
+      - run: npm ci
+      - name: Build unsigned simulator app
+        shell: bash
+        run: |
+          npm run ios:init -- --ci --skip-targets-install
+          if [ "$(uname -m)" = arm64 ]; then
+            ios_target=aarch64-sim
+            ios_arch=arm64
+          else
+            ios_target=x86_64
+            ios_arch=x86_64
+          fi
+          npm run ios:build -- --ci --debug --no-sign --target "$ios_target"
+          tar -czf ECL-iOS-simulator.app.tar.gz -C "src-tauri/gen/apple/build/$ios_arch" ECL.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ECL-iOS-simulator
+          if-no-files-found: error
+          retention-days: 14
+          path: native/ECL-iOS-simulator.app.tar.gz

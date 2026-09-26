@@ -1,0 +1,19 @@
+[package]
+name = "ecl-native-core"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Restricted native transport and configuration for the ECL client"
+publish = false
+
+[dependencies]
+base64 = "0.22"
+percent-encoding = "2.3"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "cookies", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+url = "2.5"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
