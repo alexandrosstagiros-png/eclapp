@@ -1,0 +1,17 @@
+server:
+  address: 127.0.0.1
+  port: 18314
+database:
+  path: /Users/victor/Documents/InfoBase
+infobase:
+  name: ECLLocalIntegrationTest
+  distribute-licenses: yes
+  schedule-jobs: deny
+http:
+  base: /local1c
+  odata:
+    publish: true
+    reuse-sessions:
+      mode: dontuse
+  application:
+    publish: false

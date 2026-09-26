@@ -1,0 +1,137 @@
+[
+    {
+        "id": "front",
+        "label": "ТС спереди",
+        "section": "vehicle",
+        "kind": "photo",
+        "instruction": "Снимите целиком при достаточном освещении. Отметьте повреждения и приложите крупный план при необходимости.",
+        "required": true,
+        "critical": false
+    },
+    {
+        "id": "rear",
+        "label": "ТС сзади",
+        "section": "vehicle",
+        "kind": "photo",
+        "instruction": "Снимите целиком при достаточном освещении. Отметьте повреждения и приложите крупный план при необходимости.",
+        "required": true,
+        "critical": false
+    },
+    {
+        "id": "left",
+        "label": "ТС слева",
+        "section": "vehicle",
+        "kind": "photo",
+        "instruction": "Снимите целиком при достаточном освещении. Отметьте повреждения и приложите крупный план при необходимости.",
+        "required": true,
+        "critical": false
+    },
+    {
+        "id": "right",
+        "label": "ТС справа",
+        "section": "vehicle",
+        "kind": "photo",
+        "instruction": "Снимите целиком при достаточном освещении. Отметьте повреждения и приложите крупный план при необходимости.",
+        "required": true,
+        "critical": false
+    },
+    {
+        "id": "cargo",
+        "label": "Грузовой отсек",
+        "section": "vehicle",
+        "kind": "photo",
+        "instruction": "Снимите целиком при достаточном освещении. Отметьте повреждения и приложите крупный план при необходимости.",
+        "required": true,
+        "critical": false
+    },
+    {
+        "id": "oil",
+        "label": "Моторное масло",
+        "section": "fluids",
+        "kind": "photo",
+        "instruction": "Проверьте по инструкции ТС и сфотографируйте доступный индикатор уровня. Не открывайте горячие или находящиеся под давлением ёмкости.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "coolant",
+        "label": "Охлаждающая жидкость",
+        "section": "fluids",
+        "kind": "photo",
+        "instruction": "Проверьте по инструкции ТС и сфотографируйте доступный индикатор уровня. Не открывайте горячие или находящиеся под давлением ёмкости.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "brake_fluid",
+        "label": "Тормозная жидкость",
+        "section": "fluids",
+        "kind": "photo",
+        "instruction": "Проверьте по инструкции ТС и сфотографируйте доступный индикатор уровня. Не открывайте горячие или находящиеся под давлением ёмкости.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "registration",
+        "label": "Свидетельство о регистрации ТС",
+        "section": "documents",
+        "kind": "document",
+        "instruction": "Проверьте наличие и читаемость. Приложите фото; при отсутствии выберите «Отсутствует» и укажите пояснение.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "insurance",
+        "label": "Полис ОСАГО / доступ к электронному полису",
+        "section": "documents",
+        "kind": "document",
+        "instruction": "Проверьте наличие и читаемость. Приложите фото; при отсутствии выберите «Отсутствует» и укажите пояснение.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "first_aid",
+        "label": "Аптечка",
+        "section": "equipment",
+        "kind": "check",
+        "instruction": "Отметьте наличие и состояние оборудования.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "extinguisher",
+        "label": "Огнетушитель",
+        "section": "equipment",
+        "kind": "check",
+        "instruction": "Отметьте наличие и состояние оборудования.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "warning_triangle",
+        "label": "Знак аварийной остановки",
+        "section": "equipment",
+        "kind": "check",
+        "instruction": "Отметьте наличие и состояние оборудования.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "restraints",
+        "label": "Крепления груза",
+        "section": "equipment",
+        "kind": "check",
+        "instruction": "Отметьте наличие и состояние оборудования.",
+        "required": true,
+        "critical": true
+    },
+    {
+        "id": "extra_photos",
+        "section": "other",
+        "kind": "photo",
+        "label": "Дополнительные фото механику",
+        "instruction": "Неисправности и другие детали, требующие внимания.",
+        "required": false,
+        "critical": false
+    }
+]

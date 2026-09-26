@@ -1,0 +1,81 @@
+'use strict';
+// Real UI/API using only disposable PostgreSQL and synthetic identities.
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+(async () => {
+  const fixture = await createTestServer({ builtFrontend: process.env.RECRUITMENT_BUILT_FRONTEND === 'true' });
+  const out = path.resolve(__dirname, '../.local/internal-recruiter-browser-qa');
+  let browser;
+  try {
+    await fs.mkdir(out, { recursive: true });
+    const { ids, adminPool: db, request, devLogin } = fixture;
+    await db.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=$1 AND responsibility_scope_id=$2', [ids.admin, ids.scope]);
+    const secondScope = randomUUID();
+    await db.query('INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)', [secondScope, ids.project, 'Синтетический второй проект рекрутинга']);
+    await db.query(`INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible)
+      VALUES($1,$2,$3,$4,$5,true)`, [ids.admin, ids.legal, ids.region, ids.project, secondScope]);
+    const admin = await devLogin(ids.admin);
+    const issued = await request('POST', `/access/users/${ids.admin}/password`, { phone: '+79990007192' }, admin.accessToken);
+    assert.equal(issued.status, 201);
+    browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(fixture.origin);
+    await page.locator('#login-phone').fill('+79990007192');
+    await page.locator('#login-password').fill(issued.body.password);
+    await page.getByRole('button', { name: 'Войти', exact: true }).click();
+    await page.getByRole('heading', { name: 'Сотрудники', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Добавить рекрутера', exact: true }).click();
+    const form = page.getByRole('form', { name: 'Добавить рекрутера', exact: true });
+    await form.getByLabel('Имя рекрутера', { exact: true }).fill('Синтетический штатный рекрутер браузера');
+    await form.getByLabel('Область работы рекрутера', { exact: true }).selectOption(ids.scope);
+    const createResponse = page.waitForResponse(response => response.url().endsWith('/access/employees/recruiter') && response.request().method() === 'POST');
+    await form.getByRole('button', { name: 'Создать рекрутера', exact: true }).click();
+    const created = await createResponse;
+    assert.equal(created.status(), 201);
+    const employee = await created.json();
+    assert.equal(employee.role, 'recruiter');
+    assert.equal(employee.sourceKind, 'internal_manual');
+    await page.getByRole('heading', { name: 'Выдать доступ по телефону', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'К списку', exact: true }).click();
+    const credentials = await request('POST', `/access/users/${employee.id}/password`, { phone: '+79990007193' }, (await devLogin(ids.admin)).accessToken);
+    assert.equal(credentials.status, 201);
+    const before = (await db.query('SELECT * FROM phone_credentials WHERE user_id=$1', [employee.id])).rows[0];
+    await page.getByRole('button', { name: 'Добавить рекрутера', exact: true }).click();
+    await form.getByRole('button', { name: 'Найти существующего рекрутера', exact: true }).click();
+    const card = page.locator('article.employee-card').filter({ hasText: employee.employeeNumber });
+    await card.getByRole('button', { name: 'Добавить область работы', exact: true }).click();
+    const attachForm = page.getByRole('form', { name: 'Добавить область рекрутеру', exact: true });
+    assert.equal(await attachForm.getByLabel('Область работы рекрутера', { exact: true }).inputValue(), secondScope);
+    assert.equal(await attachForm.locator(`option[value="${ids.scope}"]`).count(), 0);
+    const attachResponse = page.waitForResponse(response => response.url().endsWith('/access/employees/recruiter-scope') && response.request().method() === 'POST');
+    await attachForm.getByRole('button', { name: 'Добавить область', exact: true }).click();
+    assert.equal((await attachResponse).status(), 201);
+    await card.getByText('Синтетический второй проект рекрутинга', { exact: false }).waitFor();
+    assert.equal(await card.getByRole('button', { name: 'Добавить область работы', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('heading', { name: 'Выдать доступ по телефону', exact: true }).count(), 0);
+    assert.deepEqual((await db.query('SELECT * FROM phone_credentials WHERE user_id=$1', [employee.id])).rows[0], before);
+    await page.screenshot({ path: path.join(out, 'internal-recruiter-desktop.png'), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'Employee UI fits mobile width');
+    await page.screenshot({ path: path.join(out, 'internal-recruiter-mobile.png'), fullPage: true });
+    const ownPage = await browser.newPage();
+    ownPage.on('pageerror', error => errors.push(error.message));
+    await ownPage.goto(fixture.origin);
+    await ownPage.locator('#login-phone').fill(credentials.body.phone);
+    await ownPage.locator('#login-password').fill(credentials.body.password);
+    await ownPage.getByRole('button', { name: 'Войти', exact: true }).click();
+    await ownPage.getByRole('heading', { name: 'Рекрутинг', exact: true }).waitFor();
+    assert.deepEqual(errors, []);
+    console.log('PASS named recruiter creation, password handoff, existing account scope attachment, unchanged password, real recruiter login, responsive UI');
+  } finally {
+    if (browser) await browser.close();
+    await fixture.close();
+  }
+})().catch(error => { console.error(error); process.exitCode = 1; });

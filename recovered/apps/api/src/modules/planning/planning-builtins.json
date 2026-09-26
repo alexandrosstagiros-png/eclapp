@@ -1,0 +1,1572 @@
+[
+  {
+    "id": "azbuka",
+    "label": "Азбука вкуса · Санкт-Петербург",
+    "kind": "table",
+    "projectNames": [
+      "Азбука вкуса | Санкт-Петербург"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Азбука вкуса · Санкт-Петербург",
+        "columns": [
+          {
+            "key": "azbuka_ab",
+            "label": "Марка а/м",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "azbuka_ac",
+            "label": "Закрепленное ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "azbuka_ad",
+            "label": "Ф.И.О.",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "azbuka_ae",
+            "label": "Паспорт водителя полностью",
+            "source": "driver_passport",
+            "type": "text"
+          },
+          {
+            "key": "azbuka_af",
+            "label": "ИНН водителя",
+            "source": "driver_inn",
+            "type": "text"
+          },
+          {
+            "key": "azbuka_ag",
+            "label": "Тел.Водителя",
+            "source": "driver_phone",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 7
+    }
+  },
+  {
+    "id": "logika_moloka",
+    "label": "Логика Молока · Москва",
+    "kind": "table",
+    "projectNames": [
+      "Логика Молока Данон | Москва"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Логика Молока · Москва",
+        "columns": [
+          {
+            "key": "logika_moloka_ab",
+            "label": "дата доставки в ТТ",
+            "source": "delivery_date",
+            "type": "date"
+          },
+          {
+            "key": "logika_moloka_ac",
+            "label": "ТК",
+            "source": "carrier",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_ad",
+            "label": "ФИО водителя",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_ae",
+            "label": "№ ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_af",
+            "label": "кол-во паллетомест в авто",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_ag",
+            "label": "время подачи ТС на погрузку",
+            "source": "arrival_time",
+            "type": "time"
+          },
+          {
+            "key": "logika_moloka_ah",
+            "label": "телефон водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_ai",
+            "label": "марка АМ",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_aj",
+            "label": "заказ ТС, тонн",
+            "source": "order_tonnage",
+            "type": "text",
+            "hint": "Укажите значение в единицах, согласованных с клиентом."
+          },
+          {
+            "key": "logika_moloka_ak",
+            "label": "наличие пропуска в центр г.Москва",
+            "source": "city_center_pass",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_al",
+            "label": "комментарий",
+            "source": "comment",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_am",
+            "label": "желаемая зона",
+            "source": "preferred_zone",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_an",
+            "label": "Доп. районы (не желательно)",
+            "source": "undesired_districts",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_ao",
+            "label": "ИНН",
+            "source": "driver_inn",
+            "type": "text"
+          },
+          {
+            "key": "logika_moloka_ap",
+            "label": "Водительское улостоверение",
+            "source": "driver_license",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 30
+    }
+  },
+  {
+    "id": "appia",
+    "label": "APPIA Данон",
+    "kind": "table",
+    "projectNames": [
+      "APPIA Данон | Москва",
+      "APPIA Данон | Санкт-Петербург"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "APPIA Данон",
+        "columns": [
+          {
+            "key": "appia_ab",
+            "label": "Дата",
+            "source": "loading_date",
+            "type": "date"
+          },
+          {
+            "key": "appia_ac",
+            "label": "Время прибытия на погрузку",
+            "source": "arrival_time",
+            "type": "time"
+          },
+          {
+            "key": "appia_ad",
+            "label": "ФИО водителя",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "appia_ae",
+            "label": "Транспортная компания",
+            "source": "carrier",
+            "type": "text"
+          },
+          {
+            "key": "appia_af",
+            "label": "Марка",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "appia_ag",
+            "label": "ГосНомер",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "appia_ah",
+            "label": "Грузоподъемность",
+            "source": "payload_capacity",
+            "type": "text",
+            "hint": "Укажите значение в единицах, согласованных с клиентом."
+          },
+          {
+            "key": "appia_ai",
+            "label": "ГБ",
+            "source": "tail_lift",
+            "type": "text"
+          },
+          {
+            "key": "appia_aj",
+            "label": "День/ночь",
+            "source": "shift",
+            "type": "text"
+          },
+          {
+            "key": "appia_ak",
+            "label": "Въезд в ТТК 0-разрешено, 3- запрещено",
+            "source": "ttk_entry_code",
+            "type": "text"
+          },
+          {
+            "key": "appia_al",
+            "label": "Зона",
+            "source": "zone",
+            "type": "text"
+          },
+          {
+            "key": "appia_am",
+            "label": "Приоритетный автомобиль в зоне\n 0-нет,1-да",
+            "source": "priority_vehicle_code",
+            "type": "text"
+          },
+          {
+            "key": "appia_an",
+            "label": "Тип владения (0 - собственность; 1 - найм; 3 - аренда)",
+            "source": "ownership_code",
+            "type": "text"
+          },
+          {
+            "key": "appia_ao",
+            "label": "ИНН Водителя",
+            "source": "driver_inn",
+            "type": "text"
+          },
+          {
+            "key": "appia_ap",
+            "label": "Номер телефона Водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "appia_aq",
+            "label": "Номер прицепа",
+            "source": "trailer_plate",
+            "type": "text"
+          },
+          {
+            "key": "appia_ar",
+            "label": "Въезд в МКАД 0-разрешено, 3- запрещено",
+            "source": "mkad_entry_code",
+            "type": "text"
+          },
+          {
+            "key": "appia_as",
+            "label": "Паллетовместимость",
+            "source": "pallet_capacity",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 53
+    }
+  },
+  {
+    "id": "lamoda",
+    "label": "Lamoda",
+    "kind": "table",
+    "projectNames": [
+      "Lamoda | Москва",
+      "Lamoda | Санкт-Петербург"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Lamoda",
+        "columns": [
+          {
+            "key": "lamoda_ab",
+            "label": "Клиент",
+            "source": "client",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ac",
+            "label": "Код маршрута",
+            "source": "route_code",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ad",
+            "label": "Дата загрузки",
+            "source": "loading_date",
+            "type": "date"
+          },
+          {
+            "key": "lamoda_ae",
+            "label": "Дата сдачи",
+            "source": "delivery_date",
+            "type": "date"
+          },
+          {
+            "key": "lamoda_af",
+            "label": "Модель",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ag",
+            "label": "Номер ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ah",
+            "label": "Номер Прицепа",
+            "source": "trailer_plate",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ai",
+            "label": "Водитель",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_aj",
+            "label": "Вид документа",
+            "source": "document_type",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ak",
+            "label": "Серия",
+            "source": "document_series",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_al",
+            "label": "Номер",
+            "source": "document_number",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_am",
+            "label": "Кем выдан",
+            "source": "document_issuer",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_an",
+            "label": "Дата выдачи",
+            "source": "document_issue_date",
+            "type": "date"
+          },
+          {
+            "key": "lamoda_ao",
+            "label": "Телефон",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ap",
+            "label": "Собственник/Экспедитор?",
+            "source": "owner_or_forwarder",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_aq",
+            "label": "Тип владения ТС",
+            "source": "ownership_type",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_ar",
+            "label": "Фактический перевозчик",
+            "source": "actual_carrier",
+            "type": "text"
+          },
+          {
+            "key": "lamoda_as",
+            "label": "Стоимость Заявки",
+            "source": "order_cost",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 253
+    }
+  },
+  {
+    "id": "abrau",
+    "label": "Абрау Дюрсо",
+    "kind": "table",
+    "projectNames": [
+      "Абрау Дюрсо | Москва"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Абрау Дюрсо",
+        "columns": [
+          {
+            "key": "abrau_ab",
+            "label": "Ф.И.О. Водителя",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "abrau_ac",
+            "label": "Телефон водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "abrau_ad",
+            "label": "Гос. номер",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "abrau_ae",
+            "label": "Марка / модель",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "abrau_af",
+            "label": "форм фактор / Паллетность",
+            "source": "vehicle_body_pallets",
+            "type": "text"
+          },
+          {
+            "key": "abrau_ag",
+            "label": "Паспорт",
+            "source": "driver_passport",
+            "type": "text"
+          },
+          {
+            "key": "abrau_ah",
+            "label": "ВУ",
+            "source": "driver_license",
+            "type": "text"
+          },
+          {
+            "key": "abrau_ai",
+            "label": "ИНН",
+            "source": "driver_inn",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 305
+    }
+  },
+  {
+    "id": "kolomensky",
+    "label": "БКК Коломенский",
+    "kind": "table",
+    "projectNames": [
+      "БКК Коломенский | Москва"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "БКК Коломенский",
+        "columns": [
+          {
+            "key": "kolomensky_ab",
+            "label": "Код компании",
+            "source": "company_code",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ac",
+            "label": "ТК",
+            "source": "carrier",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ad",
+            "label": "ГоСНомерАМ",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ae",
+            "label": "Тип собственности",
+            "source": "ownership_type",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_af",
+            "label": "Собственник ТС",
+            "source": "vehicle_owner",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ag",
+            "label": "ФИО",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ah",
+            "label": "Маршрут",
+            "source": "route",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ai",
+            "label": "Подача",
+            "source": "arrival_time",
+            "type": "time"
+          },
+          {
+            "key": "kolomensky_aj",
+            "label": "Вместимость, лотков",
+            "source": "tray_capacity",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ak",
+            "label": "Высота стопки, лотков",
+            "source": "tray_stack_height",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_al",
+            "label": "Грузоподъемность, кг.",
+            "source": "payload_kg",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_am",
+            "label": "Дата оформления или последнего продления медкнижки",
+            "source": "medical_book_date",
+            "type": "date"
+          },
+          {
+            "key": "kolomensky_an",
+            "label": "Направление",
+            "source": "direction",
+            "type": "text"
+          },
+          {
+            "key": "kolomensky_ao",
+            "label": "IMEI-код",
+            "source": "tracker_imei",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 420
+    }
+  },
+  {
+    "id": "viola",
+    "label": "ВИОЛА",
+    "kind": "table",
+    "projectNames": [
+      "ВИОЛА | Санкт-Петербург"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "ВИОЛА",
+        "columns": [
+          {
+            "key": "viola_ab",
+            "label": "Порядковый номер маршрута",
+            "source": "route_sequence",
+            "type": "text"
+          },
+          {
+            "key": "viola_ac",
+            "label": "Код маршрута",
+            "source": "route_code",
+            "type": "text"
+          },
+          {
+            "key": "viola_ad",
+            "label": "Название маршрута",
+            "source": "route_name",
+            "type": "text"
+          },
+          {
+            "key": "viola_ae",
+            "label": "Склад погрузки",
+            "source": "loading_warehouse",
+            "type": "text"
+          },
+          {
+            "key": "viola_af",
+            "label": "ФИО водителя",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "viola_ag",
+            "label": "Моб. телефон водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "viola_ah",
+            "label": "Регистрационный номер ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "viola_ai",
+            "label": "IMEI-код",
+            "source": "tracker_imei",
+            "type": "text"
+          },
+          {
+            "key": "viola_aj",
+            "label": "Плановое время подачи",
+            "source": "arrival_time",
+            "type": "time"
+          },
+          {
+            "key": "viola_ak",
+            "label": "Класс автомобиля",
+            "source": "vehicle_class",
+            "type": "text"
+          },
+          {
+            "key": "viola_al",
+            "label": "Вместимость лотков по договору",
+            "source": "tray_capacity_contract",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 443
+    }
+  },
+  {
+    "id": "alidi_ufa",
+    "label": "Алиди · Уфа",
+    "kind": "table",
+    "projectNames": [
+      "Алиди | Уфа"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Алиди · Уфа",
+        "columns": [
+          {
+            "key": "alidi_ufa_ab",
+            "label": "№ п/п",
+            "source": "sequence",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_ac",
+            "label": "Ф.И.О.",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_ad",
+            "label": "Паспортные данные",
+            "source": "driver_passport",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_ae",
+            "label": "Въезд в Центр",
+            "source": "city_center_pass",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_af",
+            "label": "г/п, кг",
+            "source": "payload_kg",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_ag",
+            "label": "Гос номер авто",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_ah",
+            "label": "телефон",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "alidi_ufa_ai",
+            "label": "время загрузки",
+            "source": "loading_time",
+            "type": "time"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 490
+    }
+  },
+  {
+    "id": "miratorg_kazan",
+    "label": "Мираторг · Казань",
+    "kind": "table",
+    "projectNames": [
+      "Мираторг | Казань"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Мираторг · Казань",
+        "columns": [
+          {
+            "key": "miratorg_kazan_ab",
+            "label": "Гос. Номер",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ac",
+            "label": "Грузоподъемность",
+            "source": "payload_capacity",
+            "type": "text",
+            "hint": "Укажите значение в единицах, согласованных с клиентом."
+          },
+          {
+            "key": "miratorg_kazan_ad",
+            "label": "ОМ",
+            "source": "om",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ae",
+            "label": "Паллето-мест",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_af",
+            "label": "Ресурс",
+            "source": "resource",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ag",
+            "label": "Водитель",
+            "source": "client_driver_id",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ah",
+            "label": "ФИО",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ai",
+            "label": "Ночь",
+            "source": "night_time",
+            "type": "time"
+          },
+          {
+            "key": "miratorg_kazan_aj",
+            "label": "День",
+            "source": "morning_time",
+            "type": "time",
+            "hint": "Утренняя смена. Название столбца «День» сохранено по форме клиента."
+          },
+          {
+            "key": "miratorg_kazan_ak",
+            "label": "День",
+            "source": "day_time",
+            "type": "time"
+          },
+          {
+            "key": "miratorg_kazan_al",
+            "label": "Район",
+            "source": "district",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_am",
+            "label": "Пропуск ТС",
+            "source": "vehicle_pass",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_an",
+            "label": "Телефон",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ao",
+            "label": "ТК",
+            "source": "carrier",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_ap",
+            "label": "Гидроборт",
+            "source": "tail_lift",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_kazan_aq",
+            "label": "Комментарий",
+            "source": "comment",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 664
+    }
+  },
+  {
+    "id": "miratorg_domodedovo",
+    "label": "Мираторг · Домодедово",
+    "kind": "table",
+    "projectNames": [
+      "Мираторг | Домодедово"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Мираторг · Домодедово",
+        "columns": [
+          {
+            "key": "miratorg_domodedovo_ab",
+            "label": "Гос. Номер",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ac",
+            "label": "Грузоподъемность",
+            "source": "payload_capacity",
+            "type": "text",
+            "hint": "Укажите значение в единицах, согласованных с клиентом."
+          },
+          {
+            "key": "miratorg_domodedovo_ad",
+            "label": "ОМ",
+            "source": "om",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ae",
+            "label": "Паллето-мест",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_af",
+            "label": "Ресурс",
+            "source": "resource",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ag",
+            "label": "Водитель",
+            "source": "client_driver_id",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ah",
+            "label": "ФИО",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ai",
+            "label": "Ночь",
+            "source": "night_time",
+            "type": "time"
+          },
+          {
+            "key": "miratorg_domodedovo_aj",
+            "label": "День",
+            "source": "morning_time",
+            "type": "time",
+            "hint": "Утренняя смена. Название столбца «День» сохранено по форме клиента."
+          },
+          {
+            "key": "miratorg_domodedovo_ak",
+            "label": "День",
+            "source": "day_time",
+            "type": "time"
+          },
+          {
+            "key": "miratorg_domodedovo_al",
+            "label": "Район",
+            "source": "district",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_am",
+            "label": "Пропуск ТС",
+            "source": "vehicle_pass",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_an",
+            "label": "Телефон",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ao",
+            "label": "ТК",
+            "source": "carrier",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_ap",
+            "label": "Гидроборт",
+            "source": "tail_lift",
+            "type": "text"
+          },
+          {
+            "key": "miratorg_domodedovo_aq",
+            "label": "Такелажная рейка",
+            "source": "cargo_rail",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 687
+    }
+  },
+  {
+    "id": "sportmaster",
+    "label": "Спортмастер",
+    "kind": "table",
+    "projectNames": [
+      "Спортмастер | Москва"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Спортмастер",
+        "columns": [
+          {
+            "key": "sportmaster_ab",
+            "label": "Дата подачи ТС",
+            "source": "arrival_date",
+            "type": "date"
+          },
+          {
+            "key": "sportmaster_ac",
+            "label": "Время подачи",
+            "source": "arrival_time",
+            "type": "time"
+          },
+          {
+            "key": "sportmaster_ad",
+            "label": "Объем ТС\n \n заказа, м³",
+            "source": "ordered_volume_m3",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ae",
+            "label": "Вес груза, кг",
+            "source": "cargo_weight_kg",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_af",
+            "label": "Маршрут по адресам",
+            "source": "route_addresses",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ag",
+            "label": "Примечание 1",
+            "source": "note",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ah",
+            "label": "Объем\n \n возвр. м³",
+            "source": "return_volume_m3",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ai",
+            "label": "Объем ТС\n \n факт, м³",
+            "source": "actual_volume_m3",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_aj",
+            "label": "Номер ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ak",
+            "label": "Водитель",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_al",
+            "label": "Телефон водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_am",
+            "label": "Дата рожд-я водителя",
+            "source": "driver_birth_date",
+            "type": "date"
+          },
+          {
+            "key": "sportmaster_an",
+            "label": "Перевозчик",
+            "source": "carrier",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ao",
+            "label": "ИНН водителя",
+            "source": "driver_inn",
+            "type": "text"
+          },
+          {
+            "key": "sportmaster_ap",
+            "label": "Тип владения ТС",
+            "source": "ownership_type",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 733
+    }
+  },
+  {
+    "id": "metro",
+    "label": "Метро",
+    "kind": "table",
+    "projectNames": [
+      "Метро | Серпухов",
+      "Метро | Москва",
+      "Метро | Санкт-Петербург",
+      "Метро | Екатеринбург",
+      "Метро | Тверь",
+      "Метро | Курск"
+    ],
+    "sections": [
+      {
+        "id": "allocation",
+        "label": "Распределение по ТЦ",
+        "columns": [
+          {
+            "key": "metro_ab",
+            "label": "№ п/п",
+            "source": "sequence",
+            "type": "text"
+          },
+          {
+            "key": "metro_ac",
+            "label": "Основной ТЦ",
+            "source": "primary_store",
+            "type": "text"
+          },
+          {
+            "key": "metro_ad",
+            "label": "Альтернативный ТЦ",
+            "source": "alternative_stores",
+            "type": "text"
+          },
+          {
+            "key": "metro_ae",
+            "label": "Тоннаж",
+            "source": "tonnage",
+            "type": "text"
+          },
+          {
+            "key": "metro_af",
+            "label": "Кол-во паллет",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "metro_ag",
+            "label": "Особенности",
+            "source": "features",
+            "type": "text"
+          },
+          {
+            "key": "metro_ah",
+            "label": "Фамилия",
+            "source": "driver_surname",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "driver_vehicle_details",
+        "label": "Данные водителя и ТС",
+        "columns": [
+          {
+            "key": "metro_ak",
+            "label": "Ф.И.О. Водителя",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "metro_al",
+            "label": "Номер ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "metro_am",
+            "label": "Телефон водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "metro_an",
+            "label": "Паспортные данные водителя",
+            "source": "driver_passport",
+            "type": "text"
+          },
+          {
+            "key": "metro_ao",
+            "label": "Паллетность",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "metro_ap",
+            "label": "Марка ТС",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "metro_aq",
+            "label": "В/У",
+            "source": "driver_license",
+            "type": "text"
+          },
+          {
+            "key": "metro_ar",
+            "label": "Высота кузова",
+            "source": "body_height",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 756
+    }
+  },
+  {
+    "id": "metro_kazan",
+    "label": "Метро · Казань",
+    "kind": "table",
+    "projectNames": [
+      "Метро | Казань"
+    ],
+    "sections": [
+      {
+        "id": "allocation",
+        "label": "Распределение по ТЦ",
+        "columns": [
+          {
+            "key": "metro_kazan_ab",
+            "label": "Компания",
+            "source": "company",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ac",
+            "label": "Основной ТЦ",
+            "source": "primary_store",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ad",
+            "label": "Альтернативный ТЦ",
+            "source": "alternative_stores",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ae",
+            "label": "Тоннаж",
+            "source": "tonnage",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_af",
+            "label": "Кол-во паллет",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ag",
+            "label": "Особенности",
+            "source": "features",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ah",
+            "label": "Фамилия",
+            "source": "driver_surname",
+            "type": "text"
+          }
+        ]
+      },
+      {
+        "id": "driver_vehicle_details",
+        "label": "Данные водителя и ТС",
+        "columns": [
+          {
+            "key": "metro_kazan_ak",
+            "label": "Ф.И.О. Водителя",
+            "source": "driver_name",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_al",
+            "label": "Номер ТС",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_am",
+            "label": "Телефон водителя",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_an",
+            "label": "Паспортные данные водителя",
+            "source": "driver_passport",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ao",
+            "label": "Паллетность",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ap",
+            "label": "Марка ТС",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_aq",
+            "label": "В/У",
+            "source": "driver_license",
+            "type": "text"
+          },
+          {
+            "key": "metro_kazan_ar",
+            "label": "Высота кузова",
+            "source": "body_height",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 825
+    }
+  },
+  {
+    "id": "alidi_spb",
+    "label": "Алиди · Санкт-Петербург",
+    "kind": "table",
+    "projectNames": [
+      "Алиди | Санкт-Петербург"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Алиди · Санкт-Петербург",
+        "columns": [
+          {
+            "key": "alidi_spb_ab",
+            "label": "Подача под загрузку время",
+            "source": "arrival_time",
+            "type": "time"
+          },
+          {
+            "key": "alidi_spb_ac",
+            "label": "Комментарий территорально",
+            "source": "territorial_comment",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ad",
+            "label": "Водитель\n ФИО, ИНН , № тел.",
+            "source": "driver_name_inn_phone",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ae",
+            "label": "Марка ТС",
+            "source": "vehicle_model",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_af",
+            "label": "Гос. Номер авто ( Х001ХХ198 )",
+            "source": "vehicle_plate",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ag",
+            "label": "Тип ТС (реф, изотерм, фургон)",
+            "source": "vehicle_body_type",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ah",
+            "label": "t режим,*С",
+            "source": "temperature_regime",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ai",
+            "label": "Грузоподъемность по СТС",
+            "source": "payload_sts",
+            "type": "text",
+            "hint": "Укажите значение в единицах, согласованных с клиентом."
+          },
+          {
+            "key": "alidi_spb_aj",
+            "label": "Кол-во европаллет, шт",
+            "source": "pallet_capacity",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ak",
+            "label": "Объем ТС, куб.м.",
+            "source": "volume_m3",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_al",
+            "label": "Телефон (+79000000000 )",
+            "source": "driver_phone",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_am",
+            "label": "Права (серия, номер, дата выдачи, кем выдан)",
+            "source": "driver_license_full",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_an",
+            "label": "Паспорт (серия, номер, кем и когда выдан, КПП, .Прописка.ДР)",
+            "source": "driver_passport_full",
+            "type": "text"
+          },
+          {
+            "key": "alidi_spb_ao",
+            "label": "Санобработка кузова (срок действия если есть)",
+            "source": "body_sanitization_valid_to",
+            "type": "date"
+          },
+          {
+            "key": "alidi_spb_ap",
+            "label": "Медкнижка (срок действия если есть)",
+            "source": "medical_book_valid_to",
+            "type": "date"
+          },
+          {
+            "key": "alidi_spb_aq",
+            "label": "Примечания по состоянию машины и прочие",
+            "source": "vehicle_condition_notes",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 919
+    }
+  },
+  {
+    "id": "grand_capital",
+    "label": "Гранд Капитал · текст заявки",
+    "kind": "text",
+    "projectNames": [
+      "Гранд Капитал | Москва"
+    ],
+    "sections": [
+      {
+        "id": "main",
+        "label": "Гранд Капитал · текст заявки",
+        "columns": [
+          {
+            "key": "grand_capital_planning_date",
+            "source": "planning_date",
+            "label": "Дата заявки",
+            "type": "date"
+          },
+          {
+            "key": "grand_capital_route",
+            "source": "route",
+            "label": "Маршрут",
+            "type": "text"
+          },
+          {
+            "key": "grand_capital_driver_name",
+            "source": "driver_name",
+            "label": "Ф.И.О. водителя",
+            "type": "text"
+          },
+          {
+            "key": "grand_capital_vehicle_model",
+            "source": "vehicle_model",
+            "label": "Марка / модель",
+            "type": "text"
+          },
+          {
+            "key": "grand_capital_vehicle_plate",
+            "source": "vehicle_plate",
+            "label": "Гос. номер",
+            "type": "text"
+          },
+          {
+            "key": "grand_capital_driver_phone",
+            "source": "driver_phone",
+            "label": "Телефон водителя",
+            "type": "text"
+          }
+        ]
+      }
+    ],
+    "source": {
+      "sheet": "Планировка",
+      "headerRow": 109
+    }
+  },
+  {
+    "id": "general",
+    "label": "Общая форма",
+    "kind": "table",
+    "projectNames": [],
+    "sections": [
+      {
+        "id": "main",
+        "label": "План выходов",
+        "columns": [
+          {
+            "key": "general_sequence",
+            "source": "sequence",
+            "label": "№",
+            "type": "text"
+          },
+          {
+            "key": "general_planning_date",
+            "source": "planning_date",
+            "label": "Дата",
+            "type": "date"
+          },
+          {
+            "key": "general_arrival_time",
+            "source": "arrival_time",
+            "label": "Время выхода",
+            "type": "time"
+          },
+          {
+            "key": "general_driver_name",
+            "source": "driver_name",
+            "label": "Водитель",
+            "type": "text"
+          },
+          {
+            "key": "general_vehicle_plate",
+            "source": "vehicle_plate",
+            "label": "Гос. номер",
+            "type": "text"
+          },
+          {
+            "key": "general_driver_phone",
+            "source": "driver_phone",
+            "label": "Телефон",
+            "type": "text"
+          },
+          {
+            "key": "general_route",
+            "source": "route",
+            "label": "Маршрут",
+            "type": "text"
+          },
+          {
+            "key": "general_comment",
+            "source": "comment",
+            "label": "Комментарий",
+            "type": "text"
+          }
+        ]
+      }
+    ]
+  }
+]

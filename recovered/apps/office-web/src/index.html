@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#e8edf1" />
+    <script>
+      // Apply the saved appearance before styles and React paint the page.
+      (() => {
+        let preference = "system";
+        try {
+          preference = localStorage.getItem("ecl.theme") || "system";
+        } catch {}
+        if (!["light", "dark"].includes(preference)) preference = "system";
+        const theme =
+          preference === "system"
+            ? matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light"
+            : preference;
+        document.documentElement.dataset.themePreference = preference;
+        document.documentElement.dataset.theme = theme;
+        document.querySelector('meta[name="theme-color"]').content =
+          theme === "dark" ? "#101820" : "#e8edf1";
+      })();
+    </script>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta
+      name="description"
+      content="ЕЦЛ — управление рейсами, документами и расчётами."
+    />
+    <meta name="referrer" content="no-referrer" />
+    <title>Диспетчерская · Единый центр логистики</title>
+    <script type="module" crossorigin src="/assets/app.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/app.css" />
+    <link rel="stylesheet" href="/assets/development.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>

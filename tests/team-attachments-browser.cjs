@@ -1,0 +1,87 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+(async () => {
+  const fixture = await createTestServer({ staffTeamActors: true, builtFrontend: process.env.TEAM_BUILT_FRONTEND === 'true' });
+  let browser;
+  try {
+    const { request, devLogin, ids } = fixture;
+    const session = await devLogin(ids.drivers[0]);
+    async function api(method, route, body) {
+      const result = await request(method, route, body, session.accessToken);
+      assert.ok([200, 201].includes(result.status), `${route} HTTP${result.status}`);
+      return result.body;
+    }
+    const channel = await api('POST', '/team/conversations', { id: randomUUID(), responsibilityScopeId: ids.scope, kind: 'channel', title: 'Работа с файлами', memberIds: [] });
+    await api('POST', '/team/conversations', { id: randomUUID(), responsibilityScopeId: ids.scope, kind: 'channel', title: 'Другой канал', memberIds: [] });
+    browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
+    await context.addInitScript(value => sessionStorage.setItem('ecl.session.v2', JSON.stringify({ session: value })), { ...session, rememberedDevice: false });
+    const page = await context.newPage(), errors = [];
+    page.setDefaultTimeout(15000);
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('dialog', dialog => dialog.accept());
+    await page.goto(`${fixture.origin}/?section=team`);
+    await page.getByRole('heading', { name: 'Команда', exact: true }).waitFor();
+    await page.getByText('Работа с файлами', { exact: true }).first().click();
+    const payload = Buffer.from('Счёт для проверки\n\u0000\u0001\u00ff', 'utf8');
+    const filename = 'Счёт №42.pdf';
+    const fileInput = page.getByLabel('Прикрепить файлы к сообщению', { exact: true });
+    await fileInput.setInputFiles([{ name: filename, mimeType: 'application/pdf', buffer: payload }, { name: 'лишний.txt', mimeType: 'text/plain', buffer: Buffer.from('Удаляется перед отправкой') }]);
+    await page.getByRole('button', { name: 'Удалить файл лишний.txt', exact: true }).click();
+    await page.getByLabel('Сообщение в чат', { exact: true }).fill('Документы для согласования');
+    await page.getByText('Другой канал', { exact: true }).first().click();
+    assert.equal(await page.getByRole('button', { name: `Удалить файл ${filename}`, exact: true }).count(), 0);
+    await page.getByText('Работа с файлами', { exact: true }).first().click();
+    await page.getByRole('button', { name: `Удалить файл ${filename}`, exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Сообщение в чат', { exact: true }).inputValue(), 'Документы для согласования');
+    const output = path.resolve(__dirname, '../.local/team-attachments-qa');
+    await fs.mkdir(output, { recursive: true });
+    await page.screenshot({ path: path.join(output, 'draft-desktop.png'), fullPage: true });
+    const failedSend = route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ code: 'UNAVAILABLE', message: 'Сервис временно недоступен' }) });
+    await page.route('**/api/v1/team/messages', failedSend);
+    await page.getByRole('button', { name: 'Отправить', exact: true }).click();
+    await page.getByRole('alert').waitFor();
+    await page.getByRole('button', { name: `Удалить файл ${filename}`, exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Сообщение в чат', { exact: true }).inputValue(), 'Документы для согласования');
+    await page.unroute('**/api/v1/team/messages', failedSend);
+    await page.getByRole('button', { name: 'Отправить', exact: true }).click();
+    await page.getByRole('button', { name: `Скачать ${filename}`, exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: `Удалить файл ${filename}`, exact: true }).count(), 0);
+    async function verifyDownload(button, expectedFilename, expectedBytes) {
+      const pending = page.waitForEvent('download');
+      await button.click();
+      const download = await pending;
+      assert.equal(download.suggestedFilename(), expectedFilename);
+      assert.deepEqual(await fs.readFile(await download.path()), expectedBytes);
+    }
+    await verifyDownload(page.getByRole('button', { name: `Скачать ${filename}`, exact: true }), filename, payload);
+    await page.locator('[data-message-id]').filter({hasText:'Документы для согласования'}).first().getByRole('button',{name:'Действия сообщения',exact:true}).click();
+    await page.getByRole('menuitem', { name: 'Открыть ветку: Документы для согласования', exact: true }).click();
+    const thread = page.getByRole('complementary', { name: 'Ветка обсуждения' });
+    await thread.getByLabel('Прикрепить файлы к ответу', { exact: true }).setInputFiles({ name: 'решение.txt', mimeType: 'text/plain', buffer: Buffer.from('Согласовано') });
+    await thread.getByRole('button', { name: 'Удалить файл решение.txt', exact: true }).waitFor();
+    await thread.getByRole('button', { name: 'Отправить', exact: true }).click();
+    await thread.getByRole('button', { name: 'Скачать решение.txt', exact: true }).waitFor();
+    await verifyDownload(thread.getByRole('button', { name: 'Скачать решение.txt', exact: true }), 'решение.txt', Buffer.from('Согласовано'));
+    await page.reload();
+    await page.getByText('Работа с файлами', { exact: true }).first().click();
+    await page.getByRole('button', { name: `Скачать ${filename}`, exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Открыть ветку: Документы для согласования', exact: true }).click();
+    await thread.getByRole('button', { name: 'Скачать решение.txt', exact: true }).waitFor();
+    const detail = await api('GET', `/team/conversations/${channel.id}?responsibilityScopeId=${ids.scope}`);
+    assert.equal(detail.messages.length, 2);
+    assert.equal(detail.messages[0].attachments.length, 1);
+    assert.equal(detail.messages[1].text, '');
+    assert.equal(detail.messages[1].parentId, detail.messages[0].id);
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await page.screenshot({ path: path.join(output, 'thread-mobile.png'), fullPage: true });
+    assert.deepEqual(errors, []);
+    console.log('PASS attachments browser: multiple selection/removal, draft preservation across chats and failure, text+file and file-only thread, exact byte downloads, persistence, mobile');
+  } finally { if (browser) await browser.close(); await fixture.close(); }
+})().catch(error => { console.error(error.stack || error.message); process.exitCode = 1; });

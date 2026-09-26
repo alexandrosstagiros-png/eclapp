@@ -1,0 +1,114 @@
+'use strict';
+// Real HTTP, browser and disposable PostgreSQL; no employee data or notifications.
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+(async () => {
+  const fixture = await createTestServer({builtFrontend:process.env.TEAM_BUILT_FRONTEND==='true'}); let browser;
+  try {
+    const {ids,request,devLogin}=fixture;
+    const admin=await devLogin(ids.admin),driver=await devLogin(ids.drivers[0]);
+    const api=async(method,route,body,session=admin)=>{const result=await request(method,route,body,session.accessToken);assert.ok([200,201].includes(result.status),`${route}: HTTP${result.status} ${JSON.stringify(result.body)}`);return result.body;};
+    const bytes=Buffer.from('Синтетический оригинал инструкции\n');
+    const imported=[];
+    for(const [folderPath,title] of [['Общая информация/Введение','Знакомство с компанией'],['Папка сотрудника компании','Правила работы'],['Папка рекрутера','Подбор сотрудников']]) {
+      const filename=title+'.docx';
+      const result=await api('POST','/team/articles/import',{responsibilityScopeIds:[ids.scope],visibility:'staff',folderPath,sourcePath:folderPath+'/'+filename,title,body:'Учебный текст: '+title,sourceArchive:'Тестовые материалы.zip',file:{filename,mimeType:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',contentBase64:bytes.toString('base64')}});
+      imported.push(result.articles[0]);
+    }
+    browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
+    const errors=[];
+    async function pageFor(session,url='') {
+      const context=await browser.newContext({viewport:{width:1440,height:1000},acceptDownloads:true});
+      await context.addInitScript(value=>sessionStorage.setItem('ecl.session.v2',JSON.stringify({session:value})),{...session,rememberedDevice:false});
+      const page=await context.newPage();page.setDefaultTimeout(15000);page.on('pageerror',error=>errors.push(error.message));
+      await page.goto(fixture.origin+'/'+url);return page;
+    }
+    const page=await pageFor(admin);
+    await page.getByRole('heading',{name:'Сотрудники',exact:true}).waitFor();
+    await page.getByRole('button',{name:'Добавить тендерного специалиста',exact:true}).click();
+    let form=page.getByRole('form',{name:'Добавить тендерного специалиста',exact:true});
+    const enrollment=form.getByRole('checkbox',{name:'Нужна программа адаптации',exact:true});
+    assert.equal(await enrollment.isChecked(),false);
+    await enrollment.check();await form.getByRole('button',{name:'Отмена',exact:true}).click();
+    await page.getByRole('button',{name:'Добавить тендерного специалиста',exact:true}).click();
+    assert.equal(await enrollment.isChecked(),false,'Every new form starts with adaptation off');
+    await form.getByLabel('Имя сотрудника',{exact:true}).fill('Новый сотрудник адаптации');
+    await form.getByLabel('Область работы',{exact:true}).selectOption(ids.scope);await enrollment.check();
+    const pending=page.waitForResponse(response=>response.url().endsWith('/access/employees/tender-specialist')&&response.request().method()==='POST');
+    await form.getByRole('button',{name:'Создать сотрудника',exact:true}).click();
+    const response=await pending;assert.equal(response.status(),201);const employee=await response.json();assert.equal(employee.adaptationRequired,true);
+    const employeeSession=await devLogin(employee.id), employeePage=await pageFor(employeeSession);
+    await employeePage.getByRole('heading',{name:'Адаптация в компании',exact:true}).waitFor();
+    const adaptation=employeePage.locator('.team-adaptation'), instructions=adaptation.locator('.team-adaptation-list button');
+    assert.equal(await instructions.count(),2,'Only the two specified roots enter adaptation');
+    assert.equal(await adaptation.getByText('Подбор сотрудников',{exact:true}).count(),0);
+    assert.equal(await adaptation.getByRole('button',{name:'Завершить адаптацию',exact:true}).isEnabled(),false);
+    await adaptation.getByRole('button',{name:'Открыть инструкцию: Знакомство с компанией',exact:true}).click();
+    const reader=adaptation.locator('.team-adaptation-reader');
+    await reader.getByText('Учебный текст: Знакомство с компанией',{exact:true}).waitFor();
+    await reader.getByRole('button',{name:'Отметить прочитанным',exact:true}).click();
+    assert.equal((await api('GET','/team/adaptation',undefined,employeeSession)).readCount,1);
+    await employeePage.reload();await employeePage.getByRole('heading',{name:'Адаптация в компании',exact:true}).waitFor();
+    assert.equal((await api('GET','/team/adaptation',undefined,employeeSession)).readCount,1);
+    await adaptation.getByRole('button',{name:'Открыть инструкцию: Правила работы',exact:true}).click();
+    await reader.getByRole('button',{name:'Отметить прочитанным',exact:true}).click();
+    await adaptation.getByRole('button',{name:'Завершить адаптацию',exact:true}).click();
+    await employeePage.waitForFunction(()=>!new URL(location.href).searchParams.has('section'));
+    assert.equal((await api('GET','/team/adaptation',undefined,employeeSession)).completed,true);
+    await employeePage.reload();await employeePage.getByRole('heading',{name:'Тендеры',exact:true}).waitFor();
+    const normal=await api('POST','/access/employees/tender-specialist',{displayName:'Сотрудник без адаптации',scopeId:ids.scope,idempotencyKey:randomUUID()});
+    assert.equal(normal.adaptationRequired,false);const normalPage=await pageFor(await devLogin(normal.id));
+    await normalPage.getByRole('heading',{name:'Тендеры',exact:true}).waitFor();assert.equal(await normalPage.locator('.team-adaptation').count(),0);
+    await page.goto(fixture.origin+'/?section=team');
+    const tabs=page.getByRole('navigation',{name:'Разделы команды'});
+    await tabs.getByRole('button',{name:'База знаний',exact:true}).click();
+    await page.getByRole('button',{name:'Права на инструкции',exact:true}).click();
+    const dialog=page.getByRole('dialog',{name:'Права на инструкции',exact:true});
+    const permissions=await api('GET',`/team/knowledge-permissions?responsibilityScopeId=${ids.scope}`);
+    const label=permissions.permissions.find(item=>item.userId===employee.id).displayName;
+    const create=dialog.getByRole('checkbox',{name:`Создание инструкций: ${label}`,exact:true});
+    const edit=dialog.getByRole('checkbox',{name:`Редактирование инструкций: ${label}`,exact:true});
+    assert.equal(await create.isChecked(),false);assert.equal(await edit.isChecked(),false);
+    async function changePermission(checkbox,value) {
+      assert.equal(await checkbox.isChecked(),!value);
+      const label=await checkbox.getAttribute('aria-label');
+      const [saved]=await Promise.all([page.waitForResponse(r=>r.url().endsWith('/team/knowledge-permissions')&&r.request().method()==='PUT'),checkbox.click()]);
+      assert.equal(saved.status(),200);
+      await page.waitForFunction(({label,value})=>[...document.querySelectorAll('input[type="checkbox"]')].some(input=>input.getAttribute('aria-label')===label&&input.checked===value),{label,value});
+    }
+    await changePermission(create,true);await changePermission(edit,true);
+    await employeePage.goto(fixture.origin+'/?section=team');
+    await employeePage.getByRole('navigation',{name:'Разделы команды'}).getByRole('button',{name:'База знаний',exact:true}).click();
+    await employeePage.getByRole('button',{name:'Новая статья',exact:true}).waitFor();
+    await employeePage.locator('.team-article-item').filter({hasText:'Знакомство с компанией'}).click();
+    await employeePage.getByRole('button',{name:'Действия инструкции',exact:true}).click();
+    await employeePage.getByRole('menuitem',{name:'Редактировать',exact:true}).click();
+    await employeePage.getByLabel('Текст статьи',{exact:true}).fill('Уточнение инструкции сотрудником с правом редактирования.');
+    await employeePage.getByRole('button',{name:'Сохранить статью',exact:true}).click();
+    await employeePage.getByText('Уточнение инструкции сотрудником с правом редактирования.',{exact:true}).waitFor();
+    const fileResponse=await fetch(`${fixture.origin}/api/v1/team/articles/${imported[0].id}/source?responsibilityScopeId=${ids.scope}`,{headers:{Authorization:`Bearer ${employeeSession.accessToken}`}});
+    assert.equal(fileResponse.status,200);assert.deepEqual(Buffer.from(await fileResponse.arrayBuffer()),bytes);
+    await changePermission(create,false);await changePermission(edit,false);
+    await employeePage.reload();await employeePage.getByRole('navigation',{name:'Разделы команды'}).getByRole('button',{name:'База знаний',exact:true}).click();
+    assert.equal(await employeePage.getByRole('button',{name:'Новая статья',exact:true}).count(),0);
+    await employeePage.locator('.team-article-item').filter({hasText:'Знакомство с компанией'}).click();
+    assert.equal(await employeePage.getByRole('button',{name:'Действия инструкции',exact:true}).count(),0);
+    assert.equal(await employeePage.getByRole('menuitem',{name:'Редактировать',exact:true}).count(),0);
+    const driverPage=await pageFor(driver,'?section=team');await driverPage.getByRole('heading',{name:'Связь с отделами',exact:true}).waitFor();
+    assert.equal(await driverPage.getByRole('button',{name:'Команда',exact:true}).count(),0);
+    assert.equal(await driverPage.locator('.team-article-item').count(),0);assert.equal(await driverPage.getByRole('button',{name:'Адаптация',exact:true}).count(),0);
+    for(const item of imported) assert.equal((await request('GET',`/team/articles/${item.id}/source?responsibilityScopeId=${ids.scope}`,undefined,driver.accessToken)).status,403);
+    const output=path.resolve(__dirname,'../.local/team-adaptation-qa');await fs.mkdir(output,{recursive:true});
+    await page.screenshot({path:path.join(output,'permissions-desktop.png'),fullPage:true});
+    await employeePage.getByRole('navigation',{name:'Разделы команды'}).getByRole('button',{name:'Адаптация',exact:true}).click();
+    await employeePage.getByText('Программа завершена. Есть обновлённые инструкции для ознакомления.',{exact:true}).waitFor();
+    await employeePage.screenshot({path:path.join(output,'adaptation-desktop.png'),fullPage:true});
+    await employeePage.setViewportSize({width:390,height:844});assert.ok(await employeePage.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await employeePage.screenshot({path:path.join(output,'adaptation-mobile.png'),fullPage:true});assert.deepEqual(errors,[]);
+    console.log('PASS adaptation browser: default off, optional creation, first-login instructions, durable progress/completion, normal start, delegated create/edit/revoke, immutable original, driver exclusion, desktop/mobile');
+  } finally { if(browser)await browser.close();await fixture.close(); }
+})().catch(error=>{console.error(error.stack||error.message);process.exitCode=1;});

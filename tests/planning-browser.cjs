@@ -1,0 +1,102 @@
+'use strict';
+// Run with PLAYWRIGHT_MODULE pointing to an installed playwright/ playwright-core.
+// Uses only the isolated test database and generated credentials.
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const fs = require('node:fs/promises');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+(async () => {
+  const f = await createTestServer({ builtFrontend: process.env.PLANNING_BUILT_FRONTEND === 'true' });
+  let browser;
+  try {
+    await f.adminPool.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=ANY($1::uuid[])', [[f.ids.admin, f.ids.dispatcher]]);
+    await f.adminPool.query("UPDATE users SET role='manager',display_name='Менеджер тестового планирования' WHERE id=$1", [f.ids.dispatcher]);
+    await f.adminPool.query("UPDATE projects SET name='APPIA Данон' WHERE id=$1", [f.ids.project]);
+    const admin = await f.devLogin(f.ids.admin);
+    const issued = await f.request('POST', `/access/users/${f.ids.dispatcher}/password`, { phone: '+79990000777' }, admin.accessToken);
+    assert.equal(issued.status, 201);
+    const apiLogin = await f.request('POST', '/auth/password', { phone: '+79990000777', password: issued.body.password });
+    assert.equal(apiLogin.status, 200);
+    browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, permissions: ['clipboard-read', 'clipboard-write'] });
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    let dismissDialog = false;
+    let dialogCount = 0;
+    page.on('dialog', dialog => { dialogCount += 1; return dismissDialog ? dialog.dismiss() : dialog.accept(); });
+    await page.goto(f.origin);
+    await page.locator('#login-phone').fill('+79990000777');
+    await page.locator('#login-password').fill(issued.body.password);
+    await page.getByRole('button', { name: 'Войти', exact: true }).click();
+    await page.getByRole('heading', { name: 'Планирование', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Добавить первое назначение', exact: true }).waitFor();
+    assert.equal(await page.getByLabel('Форма подачи клиенту', { exact: true }).inputValue(), 'appia@1');
+    const date = await page.getByLabel('Дата рейсов', { exact: true }).inputValue();
+    await page.getByRole('button', { name: 'Добавить первое назначение', exact: true }).click();
+    const row = page.locator('.planning-assignment').first();
+    await row.getByLabel('Водитель', { exact: true }).selectOption(f.ids.drivers[0]);
+    const vehicleOptions = await f.request('GET', `/planning/options?responsibilityScopeId=${f.ids.scope}`, undefined, apiLogin.body.accessToken);
+    await row.getByLabel('Машина', { exact: true }).selectOption(vehicleOptions.body.vehicles[0].id);
+    await row.getByLabel('Время выхода, назначение 1').fill('05:15');
+    await row.getByLabel('Выход подтверждён', { exact: true }).check();
+    await row.getByLabel('Комментарий менеджера', { exact: true }).fill('Тестовая смена');
+    // Clicking the already active tab must retain the parent's dirty guard.
+    const previousDialogs = dialogCount;
+    await page.getByRole('button', { name: 'Планирование', exact: true }).click();
+    assert.equal(dialogCount, previousDialogs);
+    dismissDialog = true;
+    await page.getByRole('button', { name: 'Связь с отделами', exact: true }).click();
+    assert.equal(dialogCount, previousDialogs + 1);
+    assert.equal(await row.getByLabel('Комментарий менеджера', { exact: true }).inputValue(), 'Тестовая смена');
+    dismissDialog = false;
+    await row.locator('summary').click();
+    await row.getByLabel('Номер телефона Водителя', { exact: true }).fill('+79990000000');
+    await page.getByRole('button', { name: 'Сохранить план', exact: true }).click();
+    await page.getByText('План сохранён', { exact: true }).waitFor();
+    let saved = await f.request('GET', `/planning?date=${date}&responsibilityScopeId=${f.ids.scope}`, undefined, apiLogin.body.accessToken);
+    assert.equal(saved.body.rows[0].clientFields.appia_ap, '+79990000000');
+    await page.reload();
+    await page.locator('.planning-assignment').first().waitFor();
+    assert.equal(await page.getByLabel('Комментарий менеджера', { exact: true }).inputValue(), 'Тестовая смена');
+    await page.getByLabel('Форма подачи клиенту', { exact: true }).selectOption('metro@1');
+    await page.getByRole('button', { name: 'Форма клиента', exact: true }).click();
+    await page.locator('.planning-export-section').nth(1).waitFor();
+    assert.equal(await page.locator('.planning-client-table').count(), 2);
+    assert.equal(await page.locator('.planning-client-table').first().locator('th').first().textContent(), '№ п/п');
+    const downloadReady = page.waitForEvent('download');
+    await page.getByRole('button', { name: 'Скачать CSV', exact: true }).first().click();
+    const download = await downloadReady;
+    const stream = await download.createReadStream();
+    let csv = ''; for await (const chunk of stream) csv += chunk.toString('utf8');
+    assert.ok(csv.includes('Основной ТЦ'));
+    assert.ok(csv.includes('Водитель'));
+    await page.getByRole('button', { name: 'Копировать таблицу', exact: true }).nth(1).click();
+    await page.getByText('Таблица скопирована. Её можно вставить в Excel или Google Sheets.', { exact: true }).waitFor();
+    const copied = await page.evaluate(() => navigator.clipboard.readText());
+    assert.ok(copied.startsWith('Ф.И.О. Водителя\tНомер ТС'));
+    const out = path.resolve(__dirname, '../.local/planning-qa'); await fs.mkdir(out, { recursive: true });
+    await page.screenshot({ path: path.join(out, 'desktop.png'), fullPage: true });
+    await page.getByRole('button', { name: 'Назначения', exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.screenshot({ path: path.join(out, 'mobile.png'), fullPage: true });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    // Another manager saves the same plan while this browser keeps its draft.
+    const original = saved.body;
+    const concurrent = await f.request('PUT', '/planning', { businessDate: original.businessDate, responsibilityScopeId: original.responsibilityScopeId, templateId: original.templateId, version: original.version, rows: original.rows.map(r => ({ ...r, comment: 'Другая версия' })) }, apiLogin.body.accessToken);
+    assert.equal(concurrent.status, 200);
+    await page.getByLabel('Комментарий менеджера', { exact: true }).fill('Мой несохранённый комментарий');
+    await page.getByRole('button', { name: 'Сохранить план', exact: true }).click();
+    await page.getByText(/План уже изменил другой менеджер/).waitFor();
+    assert.equal(await page.getByLabel('Комментарий менеджера', { exact: true }).inputValue(), 'Мой несохранённый комментарий');
+    // Export revalidates current scope rights, not just the previously loaded draft.
+    await f.adminPool.query('UPDATE access_grants SET personal_data_visible=false WHERE user_id=$1', [f.ids.dispatcher]);
+    await page.getByRole('button', { name: 'Форма клиента', exact: true }).click();
+    await page.getByRole('button', { name: 'Копировать таблицу', exact: true }).first().click();
+    await page.waitForFunction(() => document.querySelectorAll('.planning-client-table').length === 0);
+    assert.deepEqual(errors, []);
+    console.log(JSON.stringify({ managerPasswordLogin: 'passed', clientTemplate: 'appia', persistedReload: 'passed', metroSections: 2, csv: 'passed', clipboard: 'passed', conflictPreservesDraft: 'passed', revokedExport: 'blocked', mobileOverflow: false, javascriptErrors: 0, screenshots: out }));
+  } finally { if (browser) await browser.close(); await f.close(); }
+})().catch(error => { console.error(error.stack); process.exitCode = 1; });

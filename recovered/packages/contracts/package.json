@@ -1,0 +1,12 @@
+{
+  "name": "@transport/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "node ../../scripts/build.cjs"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  }
+}

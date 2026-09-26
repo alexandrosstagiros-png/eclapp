@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and test (Node 22)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: recovered
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: recovered/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Run unit tests
+        run: npm test
+
+      # The fixtures start disposable PostgreSQL 17 clusters on loopback with
+      # synthetic data and credentials. No database service or secrets needed.
+      - name: Run API integration tests
+        run: npm run test:integration
+
+      - name: Run inspection tests
+        run: npm run test:inspections
+
+      # OCR adapters use mocked responses; the API fixture leaves OCR disabled.
+      - name: Run recruitment onboarding tests
+        run: npm run test:recruitment:onboarding

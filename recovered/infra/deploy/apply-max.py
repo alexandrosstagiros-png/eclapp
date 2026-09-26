@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""Apply a locally tested release. Run as root on the existing application host.
+
+Arguments: unpacked release directory, private MAX token file.
+Backups retain the previous runtime, web root, environment, Nginx config and DB.
+Rollback retains the additive DB migration so no business data is discarded.
+"""
+import datetime, hashlib, json, os, pathlib, shutil, subprocess, sys, time, urllib.request
+
+release = pathlib.Path(sys.argv[1]).resolve()
+token_file = pathlib.Path(sys.argv[2]).resolve()
+if os.geteuid() != 0 or not (release / 'api/apps/api/dist/main.js').is_file():
+    raise SystemExit('Root and a complete release directory are required')
+token = token_file.read_text().strip()
+if not token or any(c.isspace() for c in token):
+    raise SystemExit('Invalid token file')
+os.umask(0o077)
+stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+backup = pathlib.Path('/var/backups/transport-max') / stamp
+backup.mkdir(parents=True, mode=0o700)
+api = pathlib.Path('/opt/transport-miniapp')
+web = pathlib.Path('/var/www/transport-miniapp')
+env = pathlib.Path('/etc/transport-miniapp.env')
+nginx = pathlib.Path('/etc/nginx/sites-available/transport-miniapp')
+api_stage = pathlib.Path('/opt') / ('.transport-max-' + stamp)
+web_stage = pathlib.Path('/var/www') / ('.transport-max-' + stamp)
+if len({api.stat().st_dev, web.stat().st_dev, backup.stat().st_dev}) != 1:
+    raise SystemExit('Atomic deployment requires application and backup paths on one filesystem')
+
+def run(args, **kwargs):
+    return subprocess.run(args, check=True, capture_output=True, **kwargs)
+
+def step(message):
+    print(message, flush=True)
+
+def ready():
+    for attempt in range(30):
+        try:
+            with urllib.request.urlopen('http://127.0.0.1:3001/api/v1/health/ready', timeout=2) as response:
+                if response.status == 200 and json.load(response).get('status') == 'ok': return
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError('Application readiness check failed')
+
+baseline = json.loads((release / 'baseline.json').read_text())
+for relative, expected in baseline.items():
+    file = api / relative
+    if not file.is_file() or hashlib.sha256(file.read_bytes()).hexdigest() != expected:
+        raise RuntimeError('Production baseline changed: ' + relative)
+run(['systemctl', 'is-active', 'transport-miniapp'])
+run(['nginx', '-t'])
+step('Baseline verified; creating backup at ' + str(backup))
+shutil.copy2(env, backup / 'environment')
+shutil.copy2(nginx, backup / 'nginx.conf')
+with (backup / 'database.dump').open('wb') as output:
+    subprocess.run(['runuser', '-u', 'postgres', '--', 'pg_dump', '-Fc', 'transport'], stdout=output, check=True)
+run(['pg_restore', '--file=/dev/null', str(backup / 'database.dump')])
+step('Database archive verified; staging application')
+shutil.copytree(api, api_stage, symlinks=True)
+shutil.copytree(web, web_stage, symlinks=True)
+shutil.copytree(release / 'api', api_stage, dirs_exist_ok=True)
+shutil.copytree(release / 'web', web_stage, dirs_exist_ok=True)
+run(['chown', '-R', 'root:transport-web', str(api_stage)])
+run(['chmod', '-R', 'g+rX,o-rwx', str(api_stage)])
+run(['chown', '-R', 'root:www-data', str(web_stage)])
+run(['chmod', '-R', 'g+rX,o-rwx', str(web_stage)])
+run(['/usr/local/bin/node', '--check', str(api_stage / 'apps/api/dist/main.js')])
+
+migration = (release / '017_max_auth.sql').read_text()
+checksum = hashlib.sha256(migration.encode()).hexdigest()
+applied = run(['runuser', '-u', 'postgres', '--', 'psql', '-X', '-At', '-d', 'transport', '-c',
+    "SELECT checksum FROM schema_migrations WHERE name='017_max_auth.sql'"], text=True).stdout.strip()
+if applied and applied != checksum:
+    raise RuntimeError('Applied migration checksum differs')
+if not applied:
+    sql = "BEGIN; SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='30s'; SELECT pg_advisory_xact_lock(917042001);\n" + migration
+    sql += "\nINSERT INTO schema_migrations(name,checksum) VALUES ('017_max_auth.sql','" + checksum + "'); COMMIT;"
+    run(['runuser', '-u', 'postgres', '--', 'psql', '-X', '-v', 'ON_ERROR_STOP=1', '-d', 'transport'], input=sql, text=True)
+step('Additive database migration applied')
+swapped_api = False
+swapped_web = False
+stopped = False
+try:
+    lines = [line for line in env.read_text().splitlines() if not line.startswith(('MAX_BOT_TOKEN=', 'MAX_AUTH_MAX_AGE_SECONDS='))]
+    lines += ['MAX_BOT_TOKEN=' + token, 'MAX_AUTH_MAX_AGE_SECONDS=300']
+    pending_env = env.with_suffix('.env.max-pending')
+    pending_env.write_text('\n'.join(lines) + '\n')
+    pending_env.chmod(0o600)
+    os.replace(pending_env, env)
+    shutil.copy2(release / 'nginx.conf', nginx)
+    run(['nginx', '-t'])
+    run(['systemctl', 'stop', 'transport-miniapp'])
+    stopped = True
+    os.rename(api, backup / 'api')
+    try: os.rename(api_stage, api)
+    except Exception:
+        os.rename(backup / 'api', api)
+        raise
+    swapped_api = True
+    os.rename(web, backup / 'web')
+    try: os.rename(web_stage, web)
+    except Exception:
+        os.rename(backup / 'web', web)
+        raise
+    swapped_web = True
+    run(['systemctl', 'start', 'transport-miniapp'])
+    ready()
+    run(['systemctl', 'reload', 'nginx'])
+    ready()
+    report = {'status': 'deployed', 'backup': str(backup), 'migration': checksum,
+              'build': json.loads((release / 'build-manifest.json').read_text()),
+              'deployedAtUtc': datetime.datetime.now(datetime.timezone.utc).isoformat()}
+    (backup / 'deployment.json').write_text(json.dumps(report, indent=2) + '\n')
+    token_file.unlink()
+    print(json.dumps(report), flush=True)
+except Exception as error:
+    step('Deployment failed; restoring previous application and configuration')
+    if stopped:
+        run(['systemctl', 'stop', 'transport-miniapp'])
+    if swapped_api:
+        os.rename(api, backup / 'failed-api')
+        os.rename(backup / 'api', api)
+    if swapped_web:
+        os.rename(web, backup / 'failed-web')
+        os.rename(backup / 'web', web)
+    shutil.copy2(backup / 'environment', env)
+    shutil.copy2(backup / 'nginx.conf', nginx)
+    run(['nginx', '-t'])
+    run(['systemctl', 'start', 'transport-miniapp'])
+    run(['systemctl', 'reload', 'nginx'])
+    ready()
+    step('Previous application restored. Additive MAX migration retained. Backup: ' + str(backup))
+    raise SystemExit('Deployment failed: ' + type(error).__name__)

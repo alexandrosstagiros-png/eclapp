@@ -1,0 +1,143 @@
+.birthdays-workspace {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.birthdays-workspace * { box-sizing: border-box; }
+.birthdays-workspace :is(h1, h2, h3, p) { margin: 0; }
+.birthdays-workspace .page-heading { margin-bottom: 0; gap: 20px; }
+.birthdays-workspace .page-heading p { margin-top: 10px; }
+.birthdays-panel {
+  background: var(--surface, #fff);
+  border: 1px solid var(--line, #dce2e9);
+  border-radius: 16px;
+  overflow: hidden;
+  min-width: 0;
+}
+.birthdays-panel-heading {
+  padding: 22px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line, #dce2e9);
+}
+.birthdays-panel-heading h2 { font-size: 20px; letter-spacing: -.025em; }
+.birthdays-panel-heading p,
+.birthdays-person p,
+.birthdays-countdown time,
+.birthdays-hint { color: var(--text-secondary, #64748b); font-size: 13px; line-height: 1.6; }
+.birthdays-panel-heading p { margin-top: 6px; }
+.birthdays-today { border-top: 3px solid var(--orange, #e88543); }
+.birthdays-summary {
+  padding: 7px 11px;
+  border-radius: 9px;
+  background: var(--blue-soft, #edf2f8);
+  color: var(--blue, #375f86);
+  font-size: 12px;
+  font-weight: 600;
+}
+.birthdays-list { list-style: none; margin: 0; padding: 0; }
+.birthdays-row {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--line, #dce2e9);
+  flex-wrap: wrap;
+}
+.birthdays-row-actions { display: grid; gap: 9px; justify-items: end; }
+.birthdays-edit-button { font: inherit; font-size: 12px; color: var(--blue); background: none; border: 0; padding: 6px 0; cursor: pointer; }
+.birthdays-date-editor { flex: 1 0 100%; min-width: 0; border-top: 1px solid var(--line); padding-top: 16px; display: flex; align-items: end; gap: 12px; flex-wrap: wrap; }
+.birthdays-date-editor label { display: grid; gap: 7px; min-width: 0; font-size: 13px; }
+.birthdays-date-editor input { min-width: 0; width: 200px; max-width: 100%; }
+.birthdays-editor-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.birthdays-workspace .birthdays-date-editor .birthdays-hint { flex-basis: 100%; padding: 0; }
+.birthdays-row:last-child { border-bottom: 0; }
+.birthdays-date {
+  display: grid;
+  text-align: center;
+  gap: 3px;
+  padding: 10px 8px;
+  border-radius: 12px;
+  min-width: 72px;
+  flex-shrink: 0;
+  color: var(--blue, #375f86);
+  background: var(--blue-soft, #edf2f8);
+}
+.birthdays-date strong { font-size: 25px; line-height: 1.15; }
+.birthdays-date span { font-size: 11px; }
+.birthdays-person { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.birthdays-person h3 { font-size: 16px; line-height: 1.5; margin-bottom: 3px; }
+.birthdays-person .birthdays-birth-date { font-size: 12px; margin-top: 4px; }
+.birthdays-countdown { display: grid; gap: 4px; text-align: right; flex-shrink: 0; }
+.birthdays-countdown strong { font-size: 13px; }
+.birthdays-workspace .button { font-size: 13px; white-space: normal; }
+.birthdays-congratulate { flex-shrink: 0; }
+.birthdays-congratulate.is-done { color: var(--blue); background: var(--blue-soft); border-color: var(--blue-border); }
+.birthdays-filters { display: flex; flex-wrap: wrap; gap: 6px; }
+.birthdays-filters button {
+  background: var(--canvas, #f5f7fa);
+  color: var(--text-secondary, #64748b);
+  border: 1px solid var(--line, #dce2e9);
+  padding: 9px 12px;
+  border-radius: 8px;
+  min-height: 40px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.birthdays-filters button[aria-pressed=true] { color: var(--blue); background: var(--blue-soft); border-color: var(--blue); }
+.birthdays-workspace button:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+.birthdays-workspace .birthdays-empty { padding: 28px 24px; color: var(--muted, #64748b); font-size: 14px; line-height: 1.6; }
+.birthdays-workspace .birthdays-hint { padding: 0 24px 20px; }
+.birthdays-workspace .birthdays-missing { padding: 0; }
+.birthdays-workspace .birthdays-complete { padding: 14px 24px; color: var(--blue); font-size: 13px; }
+.birthdays-nav-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: var(--orange, #e88543);
+  color: var(--on-accent, #fff);
+  min-width: 22px;
+  padding: 2px 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-left: 8px;
+}
+.birthdays-reminder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+  padding: 18px 22px;
+  border: 1px solid var(--blue-border, #cddced);
+  border-left: 3px solid var(--orange, #e88543);
+  border-radius: 12px;
+  background: var(--surface, #fff);
+}
+.birthdays-reminder strong { font-size: 14px; }
+.birthdays-reminder p { margin: 5px 0 0; font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+.birthdays-reminder .button { font-size: 13px; flex-shrink: 0; }
+@media (max-width: 700px) {
+  .birthdays-panel-heading { padding: 18px; }
+  .birthdays-panel-heading h2 { font-size: 18px; }
+  .birthdays-row { padding: 18px; gap: 12px; flex-wrap: wrap; }
+  .birthdays-date { min-width: 62px; }
+  .birthdays-person { flex-basis: calc(100% - 80px); }
+  .birthdays-congratulate { width: 100%; }
+  .birthdays-row-actions { flex-basis: 100%; justify-items: stretch; }
+  .birthdays-edit-button { text-align: left; }
+  .birthdays-countdown { text-align: left; }
+  .birthdays-workspace .birthdays-hint,
+  .birthdays-workspace .birthdays-complete { padding-left: 18px; padding-right: 18px; }
+  .birthdays-workspace .birthdays-missing { padding: 0; }
+  .birthdays-workspace .birthdays-empty { padding: 24px 18px; }
+  .birthdays-reminder { flex-wrap: wrap; padding: 16px; }
+  .birthdays-reminder .button { width: 100%; }
+}

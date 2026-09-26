@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>Локальный тест 1С · ЕЦЛ</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="ЕЦЛ — локальный тест 1С"><span class="brand-mark">Е</span><span>ЕЦЛ</span></a>
+      <span class="topbar-divider" aria-hidden="true"></span>
+      <span class="topbar-title">Локальный тест 1С</span>
+      <span class="local-badge"><span aria-hidden="true"></span>На этом Mac</span>
+    </header>
+
+    <main>
+      <section class="page-heading" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">ПРОВЕРКА ОБМЕНА</p>
+          <h1 id="page-title">Данные из вашей 1С</h1>
+          <p class="lead">Водители, автомобили, заявки и смены из локальной базы — в одном окне.</p>
+        </div>
+        <button class="button-primary" id="refresh" type="button"><span class="refresh-icon" aria-hidden="true">↻</span><span id="refresh-label">Обновить из 1С</span></button>
+      </section>
+
+      <div id="error" class="notice notice-error" role="alert" hidden></div>
+      <div id="status" class="sr-only" role="status" aria-live="polite"></div>
+
+      <section class="source-card" aria-label="Источник данных">
+        <div class="source-symbol" aria-hidden="true">1С</div>
+        <div class="source-main">
+          <div class="source-title-row"><h2 id="source-name">Подключение к локальной базе</h2><span id="source-state" class="status-pill">Загрузка</span></div>
+          <p id="source-path" class="source-path">Читаем сведения об источнике…</p>
+          <p id="source-platform" class="source-platform"></p>
+        </div>
+        <div class="source-time"><span>Данные получены</span><strong id="fetched-at">—</strong></div>
+      </section>
+
+      <div class="scope-note"><span class="info-symbol" aria-hidden="true">i</span><p>Это локальный просмотр данных InfoBase. В базе могут быть учебные записи. Рекрутинг, ТЛЭиУАТ и КА компании к этому тесту не подключены.</p></div>
+
+      <section id="metrics" class="metrics" aria-label="Количество записей">
+        <article class="metric"><span>Водители</span><strong id="count-drivers">—</strong><small>В справочнике 1С</small></article>
+        <article class="metric"><span>Автомобили</span><strong id="count-vehicles">—</strong><small>В справочнике 1С</small></article>
+        <article class="metric"><span>Заявки</span><strong id="count-requests">—</strong><small>Документы базы</small></article>
+        <article class="metric"><span>Смены</span><strong id="count-shifts">—</strong><small id="assignment-count">Назначения: —</small></article>
+        <article class="metric metric-blue"><span>Отметки выхода</span><strong id="count-departed">—</strong><small>В строках смен 1С</small></article>
+        <article class="metric metric-green"><span>Заявка выполнена</span><strong id="count-completed">—</strong><small>Назначения с выходом</small></article>
+      </section>
+
+      <section id="warnings" class="notice notice-warning" aria-label="Замечания к данным" hidden><strong>Обратите внимание</strong><ul id="warning-list"></ul></section>
+
+      <section class="data-card" aria-labelledby="records-title" aria-busy="true" id="data-section">
+        <div class="data-heading"><div><h2 id="records-title">Записи базы</h2><p id="table-description">Загрузка данных…</p></div><span class="read-only-label">Просмотр</span></div>
+        <div class="tabs" role="tablist" aria-label="Вид записей">
+          <button id="tab-shifts" class="tab" type="button" role="tab" aria-selected="true" aria-controls="record-panel" data-tab="shifts">Смены<span id="tab-count-shifts">—</span></button>
+          <button id="tab-drivers" class="tab" type="button" role="tab" aria-selected="false" aria-controls="record-panel" data-tab="drivers" tabindex="-1">Водители<span id="tab-count-drivers">—</span></button>
+          <button id="tab-vehicles" class="tab" type="button" role="tab" aria-selected="false" aria-controls="record-panel" data-tab="vehicles" tabindex="-1">Автомобили<span id="tab-count-vehicles">—</span></button>
+          <button id="tab-requests" class="tab" type="button" role="tab" aria-selected="false" aria-controls="record-panel" data-tab="requests" tabindex="-1">Заявки<span id="tab-count-requests">—</span></button>
+        </div>
+        <div id="record-panel" role="tabpanel" aria-labelledby="tab-shifts">
+          <div class="filters">
+            <label class="search-field"><span class="sr-only">Поиск по записям</span><span class="search-icon" aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Номер, водитель, автомобиль…" autocomplete="off"></label>
+            <div class="date-filters" id="date-filters"><label>С <input id="date-from" type="date" aria-label="Дата с"></label><label>По <input id="date-to" type="date" aria-label="Дата по"></label></div>
+            <button id="reset-filters" class="button-text" type="button" hidden>Сбросить</button>
+          </div>
+          <p id="date-error" class="filter-error" role="alert" hidden>Дата начала должна быть не позже даты окончания.</p>
+          <div id="table-wrap" class="table-wrap" tabindex="0" aria-label="Таблица записей, доступна горизонтальная прокрутка"><table><thead id="table-head"></thead><tbody id="table-body"></tbody></table></div>
+          <div id="empty" class="empty-state" hidden><span class="empty-symbol" aria-hidden="true">≡</span><h3 id="empty-title">Записей пока нет</h3><p id="empty-description">После чтения базы здесь появятся данные.</p></div>
+          <div class="table-footer"><span id="visible-count">Ожидаем данные</span><span>Время показано по настройкам этого Mac</span></div>
+        </div>
+      </section>
+      <footer class="page-footer"><span>ЕЦЛ · Локальный тест обмена</span><span>Источник фактов — записи 1С</span></footer>
+    </main>
+  </body>
+</html>

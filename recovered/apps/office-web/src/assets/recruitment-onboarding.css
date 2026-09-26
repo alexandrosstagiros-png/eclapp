@@ -1,0 +1,333 @@
+/* Protected recruitment onboarding and public forms. */
+.onboarding-workspace {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+.onboarding-workspace h4 {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.onboarding-section,
+.onboarding-editor,
+.onboarding-builder,
+.onboarding-upload {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+.onboarding-card,
+.onboarding-template-card,
+.onboarding-document,
+.onboarding-gallery-card {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface, var(--field-bg));
+  min-width: 0;
+}
+.onboarding-card h3 {
+  font-size: 1.12rem;
+}
+.onboarding-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.onboarding-section-heading > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.onboarding-section-heading h3 {
+  font-size: 1.05rem;
+}
+.onboarding-section-heading p {
+  line-height: 1.65;
+}
+.onboarding-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+  min-width: 0;
+}
+.onboarding-fieldset {
+  display: grid;
+  gap: 26px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.onboarding-notice {
+  padding: 16px 18px !important;
+  background: var(--blue-soft, var(--canvas));
+  border: 1px solid var(--blue-border, var(--line));
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 0.79rem;
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.onboarding-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.55;
+  font-size: 0.78rem;
+  color: var(--text);
+}
+.onboarding-check input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--blue);
+}
+.onboarding-list {
+  display: grid;
+  gap: 12px;
+}
+.onboarding-list-item {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface, var(--field-bg));
+  min-width: 0;
+}
+.onboarding-list-item > div {
+  display: grid;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+.onboarding-list-item strong {
+  font-size: 0.87rem;
+  overflow-wrap: anywhere;
+}
+.onboarding-builder-row {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface, var(--field-bg));
+}
+.onboarding-item-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.onboarding-item-controls > .onboarding-check {
+  margin-right: auto;
+}
+.onboarding-item-controls > .button {
+  min-width: 42px;
+}
+.onboarding-staged {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px dashed var(--blue);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+.onboarding-photo {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+}
+.onboarding-gallery {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  align-items: start;
+}
+.onboarding-gallery .attachment-photo-thumbnail {
+  width: 100%;
+}
+.onboarding-gallery .attachment-photo-thumbnail img {
+  height: 170px;
+  width: 100%;
+  object-fit: contain;
+}
+.onboarding-success {
+  color: var(--success-text, var(--blue));
+  font-size: 0.8rem;
+  line-height: 1.65;
+}
+.onboarding-link {
+  display: grid;
+  gap: 12px;
+  max-width: 800px;
+}
+.onboarding-link > .button {
+  justify-self: start;
+}
+.onboarding-ocr {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--blue-border, var(--line));
+  border-radius: 12px;
+  background: var(--canvas);
+}
+.onboarding-ocr-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.7fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: center;
+}
+.onboarding-ocr summary {
+  cursor: pointer;
+  font-size: 0.8rem;
+  line-height: 1.6;
+}
+.onboarding-ocr pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 300px;
+  overflow: auto;
+  font-size: 0.78rem;
+}
+.onboarding-ocr-keys {
+  display: grid;
+  gap: 8px;
+  font-size: 0.76rem;
+}
+.onboarding-ocr-keys > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.6fr) minmax(0, 1fr);
+  gap: 14px;
+}
+.onboarding-ocr-keys dt,
+.onboarding-ocr-keys dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.onboarding-final-check {
+  padding: 22px;
+  border-radius: 12px;
+  background: var(--canvas);
+  border: 1px solid var(--line);
+}
+.onboarding-final-check > .button {
+  justify-self: start;
+}
+.onboarding-public {
+  max-width: 1000px !important;
+  padding: 40px 24px 80px;
+}
+.onboarding-public-card {
+  display: grid;
+  gap: 26px;
+  background: var(--surface, var(--field-bg));
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 34px;
+  min-width: 0;
+}
+.onboarding-public-heading {
+  display: grid;
+  gap: 12px;
+}
+.onboarding-public-heading h1 {
+  font-size: 1.8rem;
+  letter-spacing: -0.035em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+.onboarding-public-heading > p {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+.onboarding-public form {
+  display: grid;
+  gap: 24px;
+}
+.onboarding-public h2 {
+  font-size: 1.12rem;
+  line-height: 1.5;
+}
+.onboarding-public h3 {
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.onboarding-public h4 {
+  margin: 0;
+}
+.onboarding-privacy > p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.8rem;
+  line-height: 1.8;
+  color: var(--text-secondary);
+}
+@media (max-width: 1000px) {
+  .onboarding-gallery {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .onboarding-list-item {
+    flex-wrap: wrap;
+  }
+  .onboarding-list-item > div {
+    flex-basis: 60%;
+  }
+}
+@media (max-width: 620px) {
+  .onboarding-fields,
+  .onboarding-gallery,
+  .onboarding-ocr-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .onboarding-card,
+  .onboarding-document,
+  .onboarding-gallery-card,
+  .onboarding-template-card,
+  .onboarding-builder-row {
+    padding: 16px;
+  }
+  .onboarding-public {
+    padding: 16px 10px 40px;
+  }
+  .onboarding-public-card {
+    padding: 20px 16px;
+    border-radius: 12px;
+  }
+  .onboarding-public-heading h1 {
+    font-size: 1.5rem;
+  }
+  .onboarding-workspace .recruitment-actions > .button {
+    flex: 1 1 130px;
+  }
+  .onboarding-list-item {
+    padding: 16px;
+    gap: 12px;
+  }
+  .onboarding-list-item > .button {
+    width: 100%;
+  }
+  .onboarding-section-heading > .button {
+    max-width: 100%;
+  }
+}
+/* The office workflow starts with the camera. */
+.onboarding-upload > .attachment-photo-picker > .attachment-photo-actions > .button:last-child {
+  order: -1;
+  background: var(--action-fill, var(--blue));
+  border-color: var(--action-fill, var(--blue));
+  color: var(--action-text, #fff);
+}

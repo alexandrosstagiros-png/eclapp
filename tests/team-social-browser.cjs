@@ -1,0 +1,62 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs/promises'),path=require('node:path'),{randomUUID}=require('node:crypto');
+const {createTestServer}=require('./local-test-server.cjs');
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+(async()=>{
+ const f=await createTestServer({staffTeamActors:true,builtFrontend:process.env.TEAM_BUILT_FRONTEND==='true'});let browser;
+ try{
+  const {ids,devLogin,request}=f;await f.adminPool.query('UPDATE access_grants SET personal_data_visible=true');
+  await f.adminPool.query("UPDATE users SET display_name=CASE id WHEN $1 THEN 'Анна Сотрудник' WHEN $2 THEN 'Борис Коллега' ELSE display_name END WHERE id=ANY($3::uuid[])",[ids.drivers[0],ids.drivers[1],[ids.drivers[0],ids.drivers[1]]]);
+  await f.adminPool.query("INSERT INTO user_profiles(user_id,birth_date) VALUES($1,'1991-05-14')",[ids.drivers[1]]);
+  const alice=await devLogin(ids.drivers[0]),bob=await devLogin(ids.drivers[1]);
+  const api=async(method,route,body,session=bob)=>{const r=await request(method,route,body,session.accessToken);assert.ok([200,201].includes(r.status),`${route} ${r.status} ${JSON.stringify(r.body)}`);return r.body;};
+  const scoped=route=>`${route}?responsibilityScopeId=${ids.scope}`;
+  const channel=await api('POST','/team/conversations',{id:randomUUID(),responsibilityScopeId:ids.scope,kind:'channel',title:'Рабочая связь',memberIds:[]},alice);
+  const send=(text,patch={})=>api('POST','/team/messages',{id:randomUUID(),responsibilityScopeId:ids.scope,conversationId:channel.id,text,...patch},alice);
+  browser=await chromium.launch({headless:true,...(process.env.CHROME_PATH?{executablePath:process.env.CHROME_PATH}:{})});
+  const context=await browser.newContext({viewport:{width:1440,height:1000}});await context.addInitScript(value=>{
+   sessionStorage.setItem('ecl.session.v2',JSON.stringify({session:value}));window.__teamSoundCount=0;
+   window.AudioContext=class{state='running';currentTime=0;destination={};resume(){return Promise.resolve();}close(){return Promise.resolve();}createGain(){return{gain:{setValueAtTime(){},linearRampToValueAtTime(){},exponentialRampToValueAtTime(){}},connect(){}};}createOscillator(){return{frequency:{setValueAtTime(){}},connect(){},start(){window.__teamSoundCount++},stop(){}};}};
+  },{...bob,rememberedDevice:false});
+  const p=await context.newPage();p.setDefaultTimeout(20000);const errors=[],failed=[];p.on('pageerror',e=>errors.push(e.message));p.on('response',r=>{if(r.status()>=500)failed.push(r.url());});
+  await p.goto(`${f.origin}/?section=profile`);await p.getByRole('heading',{name:'Настройки',exact:true}).waitFor();
+  await p.getByLabel('Почта',{exact:true}).fill('boris@example.test');await p.getByLabel('Контактный телефон',{exact:true}).fill('+7 900 111-22-33');await p.getByLabel('Дополнительные контакты',{exact:true}).fill('Добавочный 105');assert.equal(await p.locator('input[type=date]').count(),0);await p.getByText('14 мая',{exact:true}).waitFor();
+  const photo=await p.evaluate(()=>{const c=document.createElement('canvas');c.width=2400;c.height=1600;const ctx=c.getContext('2d');const gradient=ctx.createLinearGradient(0,0,2400,1600);gradient.addColorStop(0,'#285779');gradient.addColorStop(.5,'#ffc17a');gradient.addColorStop(1,'#396881');ctx.fillStyle=gradient;ctx.fillRect(0,0,2400,1600);ctx.fillStyle='#fff';ctx.font='240px sans-serif';ctx.fillText('Б',1100,900);return c.toDataURL('image/png').split(',')[1];});
+  await p.getByLabel('Загрузить фото',{exact:true}).setInputFiles({name:'large-avatar.png',mimeType:'image/png',buffer:Buffer.from(photo,'base64')});await p.getByText(/Фото сжато до/).waitFor();
+  await p.getByRole('button',{name:'Сохранить профиль',exact:true}).click();await p.getByText('Профиль сохранён.',{exact:true}).waitFor();
+  const profile=await api('GET','/profile');assert.equal(profile.email,'boris@example.test');assert.equal(Object.hasOwn(profile,'birthDate'),false);assert.equal(profile.birthdayDay,14);assert.equal(profile.birthdayMonth,5);assert.equal((await f.adminPool.query('SELECT birth_date::text AS value FROM user_profiles WHERE user_id=$1',[ids.drivers[1]])).rows[0].value,'1991-05-14');assert.ok(Buffer.from(profile.avatarDataUrl.split(',')[1],'base64').length<=128*1024);assert.ok(profile.avatarVersion>0);
+  assert.deepEqual(await p.getByAltText('Фото профиля',{exact:true}).evaluate(img=>[img.naturalWidth,img.naturalHeight]),[512,512]);
+  await p.getByLabel('Скрыть обычные уведомления',{exact:true}).check();await p.getByLabel('Отключить звук обычных сообщений',{exact:true}).check();
+  await p.waitForFunction(()=>!document.querySelector('.profile-check input:disabled'));
+  assert.deepEqual(await api('GET','/team/notification-preferences'),{muteNotifications:true,muteSound:true});
+  await p.reload();await p.getByLabel('Почта',{exact:true}).waitFor();assert.equal(await p.getByLabel('Почта',{exact:true}).inputValue(),'boris@example.test');assert.equal(await p.getByLabel('Скрыть обычные уведомления',{exact:true}).isChecked(),true);
+  await p.getByRole('heading',{name:'Настройки',exact:true}).click();
+  await send('Обычная новость без оповещения');let response=p.waitForResponse(r=>new URL(r.url()).pathname.endsWith('/team/unread'));await p.evaluate(()=>window.dispatchEvent(new Event('team-notifications-changed')));await response;await p.getByRole('button',{name:/Уведомления команды: 1 непрочитанных/}).waitFor();assert.equal(await p.locator('.team-toast').count(),0);assert.equal(await p.evaluate(()=>window.__teamSoundCount),0);
+  const mentioned=await send(`Важное поручение @[Борис Коллега](user:${ids.drivers[1]})`,{mentions:{userIds:[ids.drivers[1]],all:false}});
+  await p.evaluate(()=>window.dispatchEvent(new Event('team-notifications-changed')));await p.locator('.team-toast.is-mention').filter({hasText:'Важное поручение'}).waitFor({timeout:25000});assert.ok(await p.evaluate(()=>window.__teamSoundCount)>0);
+  await p.locator('.team-toast.is-mention button').first().click();await p.getByRole('dialog',{name:'Сообщение с упоминанием',exact:true}).waitFor();await p.getByRole('dialog',{name:'Сообщение с упоминанием',exact:true}).getByRole('button',{name:'Закрыть',exact:true}).click();
+  const root=await send('Родительская тема'),child=await send(`Скрытое упоминание @[Борис Коллега](user:${ids.drivers[1]})`,{parentId:root.id,mentions:{userIds:[ids.drivers[1]],all:false}});
+  await p.getByRole('button',{name:'Обновить команду',exact:true}).click();await p.locator(`[data-message-id="${root.id}"]`).waitFor();await p.locator(`[data-message-id="${root.id}"]`).scrollIntoViewIfNeeded();
+  // Root receipt appears, while the collapsed branch remains unread.
+  await p.waitForFunction(async ({id,scope,token})=>{const r=await fetch(`/api/v1/team/conversations/${id}?responsibilityScopeId=${scope}`,{headers:{Authorization:`Bearer ${token}`}});const d=await r.json();return d.messages.some(m=>m.text==='Родительская тема'&&!m.isUnread);},{id:channel.id,scope:ids.scope,token:bob.accessToken});
+  const detail=await api('GET',scoped(`/team/conversations/${channel.id}`));assert.equal(detail.messages.find(m=>m.id===child.id).isUnread,true);assert.equal(detail.messages.find(m=>m.id===child.id).isUnreadMention,true);
+  const chatRow=p.locator('.team-chat-item').filter({hasText:'Рабочая связь'});
+  await chatRow.locator('.team-unread-mentions').waitFor();
+  assert.match(await chatRow.getAttribute('class'),/has-unread/);assert.match(await chatRow.getAttribute('class'),/has-mentions/);assert.match(await chatRow.getAttribute('class'),/is-muted/);
+  assert.ok(await chatRow.locator('strong').evaluate(n=>Number(getComputedStyle(n).fontWeight))>=700);
+  assert.equal(await chatRow.locator('.team-unread-mentions').textContent(),'@1');
+  assert.equal(await chatRow.locator('.team-unread-mentions').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(204, 62, 62)');
+  assert.notEqual(await chatRow.locator('.team-unread-count').evaluate(n=>getComputedStyle(n).backgroundColor),'rgb(40, 116, 213)');
+  await p.setViewportSize({width:390,height:844});
+  assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  assert.ok(await chatRow.evaluate(row=>{const bounds=row.getBoundingClientRect();return [...row.querySelectorAll('.team-unread-badges span')].every(badge=>{const b=badge.getBoundingClientRect();return b.left>=bounds.left&&b.right<=bounds.right&&b.right<=innerWidth;});}));
+  await p.setViewportSize({width:1440,height:1000});
+  await p.locator(`[data-message-id="${root.id}"]`).getByRole('button',{name:/Открыть ветку:/}).first().click();await p.locator(`[data-message-id="${child.id}"]`).waitFor();await p.locator(`[data-message-id="${child.id}"]`).scrollIntoViewIfNeeded();
+  await p.waitForFunction(async ({id,scope,token,child})=>{const r=await fetch(`/api/v1/team/conversations/${id}?responsibilityScopeId=${scope}`,{headers:{Authorization:`Bearer ${token}`}});const d=await r.json();return d.messages.some(m=>m.id===child&&!m.isUnread&&!m.isUnreadMention);},{id:channel.id,scope:ids.scope,token:bob.accessToken,child:child.id});
+  await chatRow.locator('.team-unread-badges').waitFor({state:'hidden'});
+  await p.getByRole('button',{name:'Действия чата',exact:true}).click();await p.getByRole('menuitem',{name:'Настройки уведомлений чата',exact:true}).click();let dialog=p.getByRole('dialog',{name:'Уведомления чата',exact:true});await dialog.getByLabel('Скрыть обычные уведомления этого чата',{exact:true}).check();await dialog.getByLabel('Отключить звук обычных сообщений этого чата',{exact:true}).check();await dialog.getByRole('button',{name:'Сохранить уведомления',exact:true}).click();await dialog.waitFor({state:'detached'});assert.deepEqual((await api('GET',scoped(`/team/conversations/${channel.id}`))).conversation.notificationPreferences,{muteNotifications:true,muteSound:true});
+  const output=path.resolve(__dirname,'../.local/team-social-qa');await fs.mkdir(output,{recursive:true});await p.screenshot({path:path.join(output,'chat-desktop.png'),fullPage:true});
+  await p.getByRole('button',{name:'Настройки профиля',exact:true}).click();await p.getByRole('heading',{name:'Настройки',exact:true}).waitFor();await p.screenshot({path:path.join(output,'profile-desktop.png'),fullPage:true});await p.setViewportSize({width:390,height:844});await p.screenshot({path:path.join(output,'profile-mobile.png'),fullPage:true});assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),JSON.stringify(await p.evaluate(()=>[...document.querySelectorAll('body *')].filter(n=>n.getBoundingClientRect().right>innerWidth+1).slice(-10).map(n=>({tag:n.tagName,cls:n.className,width:n.getBoundingClientRect().width,right:n.getBoundingClientRect().right})))));
+  assert.deepEqual(errors,[]);assert.deepEqual(failed,[]);console.log('PASS social browser: compressed avatar512/128KiB, persisted profile/preferences, muted normal + overriding mention toast/sound, cross-section navigation, exact visible receipts retain hidden branches, muted/mention row badges and mobile fit, independent chat prefs, desktop/mobile');
+ }finally{if(browser)await browser.close();await f.close();}
+})().catch(e=>{console.error(e.stack||e);process.exit(1);});
