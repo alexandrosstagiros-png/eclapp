@@ -33,6 +33,7 @@ const { TeamModule } = require("./modules/team/team.module");
 const { FleetMaintenanceModule } = require("./modules/fleet-maintenance/fleet-maintenance.module");
 const { FleetOperationsModule } = require("./modules/fleet-maintenance/fleet-operations.module");
 const { MaxDownloadsModule } = require("./modules/max-downloads/max-downloads.module");
+const { NeuralModule } = require("./modules/neural/neural.module");
 let HealthController = class HealthController {
     database;
     constructor(database) {
@@ -93,6 +94,7 @@ exports.AppModule = AppModule = __decorate([
             TendersModule,
             DevelopmentModule,
             TeamModule,
+            NeuralModule,
             FleetMaintenanceModule,
             FleetOperationsModule,
             NotificationsModule,

@@ -1,4 +1,4 @@
-import { columnOwner, templateFor } from './planning-model.js';
+import { columnOwner, templateFor, resetReportingFacts } from './planning-model.js';
 
 const DAY = 86400000;
 function parsed(value) {
@@ -66,6 +66,7 @@ export function changeCalendarAssignment(row, changes, template) {
     next.confirmed = false;
     next.requestCreated = false;
     next.arrived = false;
+    if (row.reporting) next.reporting = resetReportingFacts(row.reporting, vehicleChanged);
   }
   return next;
 }
@@ -93,6 +94,7 @@ function copiedRow(row, sourcePlan, targetPlan, lane, axis, templates) {
     copy[field] = lane;
     copy[axis === 'driver' ? 'vehicleId' : 'driverId'] = null;
   }
+  if (row.reporting) copy.reporting = resetReportingFacts(row.reporting, changedLane);
   const delta = Math.round((parsed(targetPlan.businessDate) - parsed(sourcePlan.businessDate)) / DAY);
   for (const field of copy.extraFields || []) {
     if (changedLane && ['driver', 'vehicle'].includes(columnOwner(field))) delete field.value;

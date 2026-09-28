@@ -22,6 +22,11 @@ export function newPlanningRow() {
   return { id: crypto.randomUUID(), driverId: null, vehicleId: null, departureTime: '', status: 'work',
     confirmed: false, requestCreated: false, arrived: false, tripCount: 1, comment: '', clientFields: {}, extraFields: [] };
 }
+// Keep daily facts out of copied assignments and replacement vehicles/drivers.
+export function resetReportingFacts(reporting, vehicleChanged = false) {
+  if (!reporting) return undefined;
+  return { ...reporting, actualTrips: null, crewPresent: null, ...(vehicleChanged ? { fleetType: null } : {}) };
+}
 export function newExtraField(source = 'manual') {
   const definition = FIELD_SOURCES.find(item => item.value === source) || FIELD_SOURCES[0];
   return { id: crypto.randomUUID(), label: definition.value === 'manual' ? 'Дополнительное поле' : definition.label.replace(/^Ручной ввод: /, ''),

@@ -1,3 +1,6 @@
+import { createRecruitmentContracts } from "./recruitment-contracts.js";
+import { createRecruitmentContractPacks } from "./recruitment-contract-packs.js";
+
 // Private onboarding: personal data and invitation tokens live in memory only.
 const BASE = "/recruitment/onboarding";
 const EMPLOYMENT = [
@@ -208,9 +211,11 @@ function normalizeOcr(value, type) {
 }
 export function createRecruitmentOnboarding(
   React,
-  { request, PhotoPicker, PhotoPreview, LocalPhotoPreview },
+  { request, authenticatedFetch, PhotoPicker, PhotoPreview, LocalPhotoPreview },
 ) {
   const { createElement: h, useState, useEffect, useRef } = React;
+  const { ContractsPanel } = createRecruitmentContracts(React, { request, authenticatedFetch });
+  const { ContractPacksPanel } = createRecruitmentContractPacks(React, { request });
   const button = (label, onClick, props = {}) =>
     h(
       "button",
@@ -714,6 +719,7 @@ export function createRecruitmentOnboarding(
     onClose,
     onDirtyChange,
     onExpired,
+    onContracts,
   }) {
     const [session, setSession] = useState(initial),
       [values, setValues] = useState(initial.values || {}),
@@ -940,7 +946,9 @@ export function createRecruitmentOnboarding(
             `${template.destination} · ${employmentName(template.employmentType)} · ${statusName(session.status)}`,
           ),
         ),
-        button("К списку оформлений", onClose, { disabled: busy }),
+        h("div", { className: "recruitment-actions" },
+          button("Оформить комплект", () => onContracts(session), { disabled: busy }),
+          button("К списку оформлений", onClose, { disabled: busy })),
       ),
       notice(
         "Фотографии удаляются автоматически через 72 часа после загрузки, даже если проверка ещё не завершена. Проверенные фото можно удалить раньше в разделе «Фотографии».",
@@ -1200,7 +1208,11 @@ export function createRecruitmentOnboarding(
       [error, setError] = useState(""),
       [message, setMessage] = useState(""),
       [busy, setBusy] = useState(false);
-    const [tab, setTab] = useState("sessions"),
+    const [contractSession, setContractSession] = useState(null);
+    const [contractTemplate, setContractTemplate] = useState(null);
+    const [kind, setKind] = useState("employee");
+    const packDrafts = useRef({});
+    const [tab, setTab] = useState("packs"),
       [templateDraft, setTemplateDraft] = useState(null),
       [session, setSession] = useState(null),
       [selectedPhotos, setSelectedPhotos] = useState({});
@@ -1316,11 +1328,13 @@ export function createRecruitmentOnboarding(
       );
     }
     function navigate(next) {
-      if (busy || !discard()) return;
+      if (busy || (tab !== "packs" && !discard())) return;
       setDirty(false);
       setSession(null);
       setTemplateDraft(null);
       setTab(next);
+      setContractSession(null);
+      setContractTemplate(null);
       setMessage("");
       setError("");
     }
@@ -1392,6 +1406,15 @@ export function createRecruitmentOnboarding(
     return h(
       "div",
       { className: "onboarding-workspace" },
+      h("nav", { className: "recruitment-segment onboarding-kind-segment", "aria-label": "Вид оформления" },
+        ...[["employee", "Водитель · ТК"], ["carrier", "Перевозчик"]].map(([id, label]) =>
+          button(label, () => {
+            if (busy || kind === id) return;
+            // Pack drafts stay in memory when moving between the two workflows.
+            if (tab !== "packs" && !discard()) return;
+            setDirty(false); setSession(null); setTemplateDraft(null); setContractSession(null);
+            setContractTemplate(null); setKind(id); setTab("packs"); setMessage(""); setError("");
+          }, { key: id, "aria-pressed": kind === id, disabled: busy }))),
       h(
         "nav",
         {
@@ -1399,11 +1422,14 @@ export function createRecruitmentOnboarding(
           "aria-label": "Разделы оформления",
         },
         ...[
-          ["sessions", "Оформления"],
-          ...(context?.canManageTemplates
-            ? [["templates", "Конструктор форм"]]
+          ["packs", "Комплект"],
+          ...(kind === "employee" ? [["sessions", "Анкеты"]] : []),
+          ["contracts", "Договоры"],
+          ...(kind === "employee" && context?.canManageTemplates
+            ? [["templates", "Конструктор анкет"]]
             : []),
-          ["photos", "Фотографии"],
+          ...(context?.canAccessContractTemplates ? [["contractTemplates", "Шаблоны договоров"]] : []),
+          ...(kind === "employee" ? [["photos", "Фотографии"]] : []),
         ].map(([id, label]) =>
           button(label, () => navigate(id), {
             key: id,
@@ -1422,10 +1448,12 @@ export function createRecruitmentOnboarding(
         ),
       context?.storageConfigured === false &&
         !session &&
+        kind === "employee" && tab === "sessions" &&
         notice(
           "Хранилище фотографий пока не настроено. Обратитесь к администратору; загрузка фото станет доступна после подключения.",
         ),
       context?.cleanup?.failed &&
+        kind === "employee" && tab === "photos" &&
         notice(
           "Фоновое удаление фотографий задерживается. Доступ к просроченным снимкам уже закрыт; система повторит удаление.",
         ),
@@ -1437,6 +1465,40 @@ export function createRecruitmentOnboarding(
       !loading &&
         !context &&
         button("Повторить загрузку", () => perform(() => load())),
+      context && tab === "packs" && h(ContractPacksPanel, {
+        key: `pack-${kind}-${contractSession?.id || "new"}`,
+        token, kind, scopes, defaultScopeId, candidates, sessions,
+        initialCandidateId: contractSession?.candidateId || initialCandidateId,
+        initialSessionId: contractSession?.id || "",
+        initialDraft: packDrafts.current[kind],
+        onDraftChange: (value) => { packDrafts.current[kind] = value; },
+        onExpired, onDirtyChange: setDirty, onBusyChange: setBusy,
+        onQuestionnaires: (source) => {
+          setDirty(false);
+          setCandidateId(source.candidateId || "");
+          if (source.sessionId) {
+            navigate("sessions");
+            openSession({ id: source.sessionId });
+            return;
+          }
+          perform(async () => {
+            // Installing the pack may also have added the OCR questionnaire.
+            const latest = await load();
+            const photoTemplate = (latest.templates || []).find((item) => item.active && item.employmentType === "employee"
+              && item.name === "Водитель · ТК" && item.responsibilityScopeId === source.responsibilityScopeId);
+            setTab("sessions");
+            if (!photoTemplate) {
+              setEmploymentType("employee");
+              return;
+            }
+            const result = await request(`${BASE}/sessions`, { method: "POST", body: JSON.stringify({
+              templateId: photoTemplate.id, ...(source.candidateId ? { candidateId: source.candidateId } : {}),
+            }) }, token);
+            updated(result); setSession(result);
+          });
+        },
+        onDocuments: () => { setDirty(false); navigate("contracts"); },
+      }),
       context &&
         tab === "sessions" &&
         (session
@@ -1458,6 +1520,17 @@ export function createRecruitmentOnboarding(
               },
               onDirtyChange: setDirty,
               onExpired,
+              onContracts: (item) => {
+                if (busy || !discard()) return;
+                setDirty(false);
+                setSession(null);
+                setContractSession(item);
+                delete packDrafts.current.employee;
+                setKind("employee");
+                setTab("packs");
+                setMessage("");
+                setError("");
+              },
             })
           : h(
               React.Fragment,
@@ -1737,6 +1810,24 @@ export function createRecruitmentOnboarding(
                 ),
               ),
             )),
+      context && ["contracts", "contractTemplates"].includes(tab) &&
+        h(ContractsPanel, {
+          key: `contracts-${tab}-${contractSession?.id || "all"}-${contractTemplate?.id || "list"}`,
+          token, scopes, defaultScopeId, candidates, sessions,
+          initialCandidateId: contractSession?.candidateId || initialCandidateId,
+          initialSessionId: contractSession?.id || "",
+          view: tab === "contractTemplates" ? "templates" : "documents",
+          onExpired, onDirtyChange: setDirty, onBusyChange: setBusy,
+          initialTemplate: contractTemplate,
+          onOpenTemplate: (item) => {
+            setDirty(false);
+            setContractSession(null);
+            setContractTemplate(item);
+            setTab("contractTemplates");
+            setMessage("Исходный шаблон восстановлен как новый черновик. Проверьте его и опубликуйте, когда он будет готов.");
+            setError("");
+          },
+        }),
       context &&
         tab === "photos" &&
         h(

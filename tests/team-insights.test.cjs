@@ -2,7 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const { nextRun, previousRun, scheduleInput, periodInput, extractDigest } = require('../recovered/apps/api/src/modules/team/team-insights-domain');
+const { nextRun, previousRun, scheduleInput, periodInput, extractDigest, fleetReportInput, reportBusinessDate, summaryPublicationText } = require('../recovered/apps/api/src/modules/team/team-insights-domain');
 const daily = { frequency: 'daily', time: '09:00', timeZone: 'Europe/Moscow', weekday: 1 };
 test('daily and weekly schedules use local calendar time and advance strictly beyond an occurrence', () => {
   assert.equal(nextRun(daily, new Date('2026-09-25T05:59:59Z')).toISOString(), '2026-09-25T06:00:00.000Z');
@@ -45,4 +45,41 @@ test('source-based digest retains evidence, exact text and all matches without a
   assert.match(report.overview, /эвристически/);
   assert.equal(report.mode, 'extractive');
   assert.equal(extractDigest([]).messageCount, 0);
+});
+test('fleet reports default to automatic sources, retain explicit coverage and derive local business dates', () => {
+  const responsibilityScopeId = randomUUID(), second = randomUUID();
+  const base = { ...daily, responsibilityScopeId, enabled: true, reportKind: 'fleet_release', recipientIds: [] };
+  assert.deepEqual(scheduleInput(base).sourceScopeIds, []);
+  assert.deepEqual(scheduleInput({ ...base, sourceScopeIds: [] }).sourceScopeIds, []);
+  assert.equal(scheduleInput(base).reportDayOffset, 0);
+  assert.deepEqual(scheduleInput({ ...base, sourceScopeIds: [second, responsibilityScopeId, second] }).sourceScopeIds, [responsibilityScopeId, second].sort());
+  for (const patch of [{ reportKind: 'other' }, { sourceScopeIds: [null] }, { reportDayOffset: 2 },
+    { reportDayOffset: '1' }, { frequency: 'weekly' }, { recipientIds: [second] }, { reportKind: 'conversation_summary', sourceScopeIds: [second] }])
+    assert.throws(() => scheduleInput({ ...base, ...patch }), error => error.status === 400);
+  const request = { responsibilityScopeId, businessDate: '2026-09-28', sourceScopeIds: `${second},${responsibilityScopeId}` };
+  const automatic = { responsibilityScopeId, businessDate: request.businessDate };
+  assert.deepEqual(fleetReportInput(automatic).sourceScopeIds, []);
+  assert.deepEqual(fleetReportInput({ ...automatic, sourceScopeIds: [] }).sourceScopeIds, []);
+  assert.deepEqual(fleetReportInput({ ...automatic, sourceScopeIds: '' }, true).sourceScopeIds, []);
+  assert.deepEqual(fleetReportInput(request, true).sourceScopeIds, [responsibilityScopeId, second].sort());
+  assert.throws(() => fleetReportInput(request), error => error.status === 400);
+  for (const businessDate of ['2026-02-30', '2026-9-28', '2026-09-28T00:00:00Z']) assert.throws(() => fleetReportInput({ responsibilityScopeId, businessDate }));
+  const boundary = new Date('2026-09-27T21:30:00Z');
+  assert.equal(reportBusinessDate(boundary, 'Europe/Moscow'), '2026-09-28');
+  assert.equal(reportBusinessDate(boundary, 'Europe/Moscow', 1), '2026-09-27');
+  assert.equal(reportBusinessDate(new Date('2026-11-01T06:30:00Z'), 'America/New_York', 1), '2026-10-31');
+});
+
+test('summary schedules retain selected target chat and publication keeps readable bounded evidence', () => {
+  const responsibilityScopeId = randomUUID(), conversationId = randomUUID();
+  assert.equal(scheduleInput({ ...daily, responsibilityScopeId, enabled: true, conversationId }).conversationId, conversationId);
+  assert.throws(() => scheduleInput({ ...daily, responsibilityScopeId, enabled: true, conversationId: 'forged' }));
+  const report = { id: randomUUID(), title: 'Сводка', mode: 'extractive', periodStart: '2026-09-27T00:00:00Z', periodEnd: '2026-09-28T00:00:00Z', messageCount: 200, overview: 'Проверенный обзор',
+    items: Array.from({ length: 200 }, (_, index) => ({ category: 'task', text: `Задача ${index}. ${'Точное сообщение. '.repeat(30)}` })) };
+  const text = summaryPublicationText(report);
+  assert.ok(text.length <= 12000);
+  assert.match(text, /Проверенный обзор/);
+  assert.match(text, /Задача 0/);
+  assert.match(text, /сокращена/);
+  assert.ok(text.endsWith(report.id));
 });

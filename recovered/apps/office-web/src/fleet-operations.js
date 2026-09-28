@@ -541,6 +541,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
     data,
     disabled,
     driver = false,
+    priceAnalysis,
   }) {
     const [draft, setDraft] = useState(() => structuredClone(record));
     const [catalogVehicleId, setCatalogVehicleId] = useState("");
@@ -625,6 +626,9 @@ export function createFleetOperationsWorkspace(React, { request }) {
             { className: "fleet-ops-muted" },
             "Документ доступен для просмотра. Проведённые движения сохраняются в истории.",
           ),
+        priceAnalysis && (JSON.stringify(draft) === JSON.stringify(record)
+          ? priceAnalysis
+          : h("p", { className: "fleet-ops-muted" }, "Сохраните изменения заказ-наряда, чтобы проверить актуальные цены.")),
         h(
           "footer",
           null,
@@ -649,6 +653,7 @@ export function createFleetOperationsWorkspace(React, { request }) {
     scopes = [],
     importScopeIds = [],
     canWrite,
+    PriceAnalysis,
   }) {
     const scopeList = useRef(scopes);
     scopeList.current = scopes.length ? scopes : [{ responsibilityScopeId: scopeId }];
@@ -1168,6 +1173,8 @@ export function createFleetOperationsWorkspace(React, { request }) {
           busy,
           error: formError,
           disabled: !canWrite || readonly(form.kind, form.record),
+          priceAnalysis: PriceAnalysis && form.kind === "orders" && form.record.version && form.record.status !== "cancelled"
+            ? h(PriceAnalysis, { token, onExpired, responsibilityScopeId: form.record.responsibilityScopeId || scopeId, orderId: `app:${form.record.id}` }) : null,
           onClose: () => setForm(null),
           onSave: (draft) =>
             mutation(

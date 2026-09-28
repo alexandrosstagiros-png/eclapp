@@ -1,0 +1,38 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+
+test('release facts persist in existing plans and responsible managers retain scoped authorization', { timeout: 180000 }, async t => {
+  const fixture = await createTestServer();
+  t.after(() => fixture.close());
+  const { ids, adminPool: db, request } = fixture;
+  await db.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=$1', [ids.admin]);
+  const session = await fixture.devLogin(ids.admin);
+  const managerId = randomUUID(), outsideId = randomUUID();
+  for (const id of [managerId, outsideId]) await db.query("INSERT INTO users(id,display_name,role,active,approved) VALUES($1,'Synthetic release manager','manager',true,true)", [id]);
+  await db.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible) VALUES($1,$2,$3,$4,$5,true)', [managerId, ids.legal, ids.region, ids.project, ids.scope]);
+  const options = await request('GET', `/planning/options?responsibilityScopeId=${ids.scope}`, undefined, session.accessToken);
+  assert.equal(options.status, 200);
+  assert.ok(options.body.managers.some(person => person.id === managerId));
+  assert.ok(!options.body.managers.some(person => person.id === outsideId));
+  const row = { id: randomUUID(), vehicleId: options.body.vehicles[0].id, status: 'work', reporting: { block: 'crew', fleetType: 'own', managerId, actualTrips: 2, crewRequired: 2, crewPresent: 2 } };
+  const input = { responsibilityScopeId: ids.scope, businessDate: '2026-09-28', templateId: 'general', rows: [row], version: 0 };
+  const saved = await request('PUT', '/planning', input, session.accessToken);
+  assert.equal(saved.status, 200, JSON.stringify(saved.body));
+  assert.deepEqual(saved.body.rows[0].reporting, row.reporting);
+  const fetched = await request('GET', `/planning?responsibilityScopeId=${ids.scope}&date=2026-09-28`, undefined, session.accessToken);
+  assert.deepEqual(fetched.body.rows[0].reporting, row.reporting);
+  const body = { ...input, version: saved.body.version };
+  const forbidden = await request('PUT', '/planning', { ...body, rows: [{ ...row, reporting: { ...row.reporting, managerId: outsideId } }] }, session.accessToken);
+  assert.equal(forbidden.status, 400);
+  await db.query('UPDATE users SET active=false WHERE id=$1', [managerId]);
+  assert.equal((await request('PUT', '/planning', body, session.accessToken)).status, 400);
+  const clear = await request('PUT', '/planning', { ...body, rows: [{ ...row, status: 'no_work', reporting: { ...row.reporting, managerId: null, actualTrips: 0 } }] }, session.accessToken);
+  assert.equal(clear.status, 200, JSON.stringify(clear.body));
+  const calendar = await request('GET', `/planning/calendar?responsibilityScopeId=${ids.scope}&from=2026-09-28&to=2026-09-29`, undefined, session.accessToken);
+  assert.equal(calendar.status, 200);
+  assert.equal(calendar.body.plans[0].rows[0].reporting.actualTrips, 0);
+  assert.equal(calendar.body.plans[0].rows[0].status, 'no_work');
+});

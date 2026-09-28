@@ -73,8 +73,11 @@ class TeamController {
   summaries(actor, query) { return this.insights.summaries(actor, query); }
   generate(actor, body, request) { return this.insights.generate(actor, body, request.correlationId); }
   share(actor, id, body, request) { return this.insights.share(actor, id, body, request.correlationId); }
+  publishSummary(actor, id, body, request) { return this.insights.publish(actor, id, body, request.correlationId); }
   schedules(actor, query) { return this.insights.schedules(actor, query); }
   saveSchedule(actor, body, request) { return this.insights.saveSchedule(actor, body, request.correlationId); }
+  fleetReport(actor, query) { return this.insights.fleetReport(actor, query); }
+  publishFleetReport(actor, body, request) { return this.insights.fleetReport(actor, body, true, request.correlationId); }
 }
 Inject(TeamService)(TeamController, undefined, 0);
 Inject(TeamInsightsService)(TeamController, undefined, 1);
@@ -90,7 +93,8 @@ const routes = [['notificationPreferences', Get('notification-preferences')], ['
   ['knowledgePermissions', Get('knowledge-permissions')], ['saveKnowledgePermission', Put('knowledge-permissions')], ['adaptation', Get('adaptation')],
   ['readAdaptationArticle', Put('adaptation/articles/:id/read')], ['completeAdaptation', Put('adaptation/complete')],
   ['mentions', Get('mentions')], ['readMention', Put('mentions/:id/read')],
-  ['summaries', Get('summaries')], ['generate', Post('summaries')], ['share', Put('summaries/:id/sharing')], ['schedules', Get('schedules')], ['saveSchedule', Put('schedules')]];
+  ['summaries', Get('summaries')], ['generate', Post('summaries')], ['share', Put('summaries/:id/sharing')], ['publishSummary', Post('summaries/:id/publish')], ['schedules', Get('schedules')], ['saveSchedule', Put('schedules')],
+  ['fleetReport', Get('fleet-reports')], ['publishFleetReport', Post('fleet-reports')]];
 for (const [name, decorator] of routes) {
   const descriptor = Object.getOwnPropertyDescriptor(TeamController.prototype, name);
   decorator(TeamController.prototype, name, descriptor);
@@ -102,8 +106,8 @@ Req()(TeamController.prototype, 'conversations', 2);
 Query('responsibilityScopeId')(TeamController.prototype, 'unread', 1);
 Req()(TeamController.prototype, 'unread', 2);
 Body()(TeamController.prototype, 'setNotificationPreferences', 1);
-for (const name of ['summaries', 'schedules']) Query()(TeamController.prototype, name, 1);
-for (const name of ['createConversation', 'send', 'saveArticle', 'importArticle', 'saveKnowledgePermission', 'completeAdaptation', 'generate', 'saveSchedule']) {
+for (const name of ['summaries', 'schedules', 'fleetReport']) Query()(TeamController.prototype, name, 1);
+for (const name of ['createConversation', 'send', 'saveArticle', 'importArticle', 'saveKnowledgePermission', 'completeAdaptation', 'generate', 'saveSchedule', 'publishFleetReport']) {
   Body()(TeamController.prototype, name, 1); Req()(TeamController.prototype, name, 2);
 }
 Param('id')(TeamController.prototype, 'detail', 1);
@@ -115,7 +119,7 @@ Query('responsibilityScopeId')(TeamController.prototype, 'changes', 2);
 Query('afterChange')(TeamController.prototype, 'changes', 3);
 Req()(TeamController.prototype, 'changes', 4);
 Query('readMessageIds')(TeamController.prototype, 'changes', 5);
-for (const name of ['editMessage', 'deleteMessage', 'react', 'setModeration', 'setConversationAccess', 'setChannelLifecycle', 'setChannelOrder', 'setConversationNotificationPreferences', 'readConversation', 'deleteArticle']) {
+for (const name of ['editMessage', 'deleteMessage', 'react', 'setModeration', 'setConversationAccess', 'setChannelLifecycle', 'setChannelOrder', 'setConversationNotificationPreferences', 'readConversation', 'deleteArticle', 'publishSummary']) {
   Param('id')(TeamController.prototype, name, 1);
   Body()(TeamController.prototype, name, 2);
   Req()(TeamController.prototype, name, 3);

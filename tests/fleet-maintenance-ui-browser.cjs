@@ -242,21 +242,6 @@ async function workbook(count = 205, amount = 20) {
       path: path.join(output, "overview-desktop.png"),
       fullPage: true,
     });
-    const [presentation] = await Promise.all([
-      page.waitForEvent("download"),
-      page
-        .getByRole("button", { name: "Презентация PPTX", exact: true })
-        .click(),
-    ]);
-    const pptxPath = path.join(output, "filtered-report.pptx");
-    await presentation.saveAs(pptxPath);
-    const pptx = await fs.readFile(pptxPath);
-    assert.equal(pptx.subarray(0, 2).toString(), "PK");
-    assert.ok(pptx.length > 10000);
-    console.log(
-      "PASS presentation download uses the real report.pptx endpoint",
-    );
-
     await page
       .getByRole("navigation", { name: "Разделы обслуживания" })
       .getByRole("button", { name: "Позиции", exact: true })

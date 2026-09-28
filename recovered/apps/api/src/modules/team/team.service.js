@@ -136,7 +136,8 @@ class TeamService {
         JOIN legal_entities le ON le.id=p.legal_entity_id JOIN regions r ON r.id=p.region_id
         WHERE rs.id=ANY($1::uuid[]) ORDER BY le.name,r.name,p.name,rs.name,rs.id`, [actor.grants.map(grant => grant.responsibilityScopeId)]);
       const scopes = result.rows.map(response);
-      return { scopes, workScopes: scopes.filter(scope => actor.sourceGrants.some(grant => grant.responsibilityScopeId === scope.responsibilityScopeId)),
+      return { scopes, workScopes: scopes.filter(scope => actor.sourceGrants.some(grant => grant.responsibilityScopeId === scope.responsibilityScopeId))
+        .map(scope => ({ ...scope, personalDataVisible: actor.sourceGrants.some(grant => grant.responsibilityScopeId === scope.responsibilityScopeId && grant.personalDataVisible) })),
         defaultResponsibilityScopeId: scopes[0]?.responsibilityScopeId || null, companyMode: true, canManage: canManage(actor), policy: POLICY };
     });
   }
@@ -585,8 +586,10 @@ class TeamService {
     });
   }
   async send(supplied, body, correlationId) {
-    return this.database.transaction(async client => {
-      const actor = await this.current(client, supplied);
+    return this.database.transaction(async client => this.sendInTransaction(client, await this.current(client, supplied), body, correlationId));
+  }
+  // Internal transaction helper: callers supply an actor already revalidated in this transaction.
+  async sendInTransaction(client, actor, body, correlationId) {
       const input = messageInput(body);
       const scope = await this.scope(client, actor, input.responsibilityScopeId);
       await this.lockScope(client, scope);
@@ -633,7 +636,6 @@ class TeamService {
         { conversationId: input.conversationId, parentId: input.parentId, attachmentCount: input.attachments.length, mentionCount: recipients.length, mentionAll: input.mentions.all });
       const [readStatus] = await this.messageReadStatuses(client, actor, scope, [input.id]);
       return publicAuthored({ ...result.rows[0], delivery: readStatus.delivery, attachments: input.attachments.map(attachmentMetadata), reactions: [], isUnread: false, isUnreadMention: false, requiresReadReceipt: false }, actor, scope);
-    });
   }
   async enforceConversationInterval(client, actor, scope, conversationId) {
     if (canManage(actor)) return;

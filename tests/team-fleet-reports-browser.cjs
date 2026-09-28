@@ -1,0 +1,163 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { createTestServer } = require('./local-test-server.cjs');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+(async () => {
+  const fixture = await createTestServer({ staffTeamActors: true, builtFrontend: process.env.TEAM_BUILT_FRONTEND === 'true' });
+  let browser;
+  try {
+    const { ids, adminPool, devLogin, request } = fixture;
+    const source = randomUUID(), unavailable = randomUUID(), companyOnly = randomUUID();
+    await adminPool.query('UPDATE access_grants SET personal_data_visible=true WHERE user_id=$1', [ids.admin]);
+    for (const [id, name, access] of [[source, 'Экипажный блок', true], [unavailable, 'Без доступа к данным', false], [companyOnly, 'Только общение', null]]) {
+      await adminPool.query('INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)', [id, ids.project, name]);
+      if (access !== null) await adminPool.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible) VALUES($1,$2,$3,$4,$5,$6)', [ids.admin, ids.legal, ids.region, ids.project, id, access]);
+    }
+    const targetLegal = randomUUID(), targetProject = randomUUID(), targetScope = randomUUID();
+    await adminPool.query('INSERT INTO legal_entities(id,name) VALUES($1,$2)', [targetLegal, 'Я Компания получателя отчетов']);
+    await adminPool.query('INSERT INTO projects(id,name,legal_entity_id,region_id) VALUES($1,$2,$3,$4)', [targetProject, 'Компания чата', targetLegal, ids.region]);
+    await adminPool.query('INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)', [targetScope, targetProject, 'Область чата без доступа к планам']);
+    await adminPool.query('INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,personal_data_visible) VALUES($1,$2,$3,$4,$5,false)', [ids.admin, targetLegal, ids.region, targetProject, targetScope]);
+    const admin = await devLogin(ids.admin);
+    const api = async (method, url, body) => {
+      const result = await request(method, url, body, admin.accessToken);
+      assert.ok([200, 201].includes(result.status), `${url}: ${result.status} ${JSON.stringify(result.body)}`);
+      return result.body;
+    };
+    const reports = await api('POST', '/team/conversations', { id: randomUUID(), responsibilityScopeId: ids.scope, kind: 'channel', title: 'Отчеты', memberIds: [] });
+    const targetReports = await api('POST', '/team/conversations', { id: randomUUID(), responsibilityScopeId: targetScope, kind: 'channel', title: 'Отчеты', memberIds: [] });
+    const other = await api('POST', '/team/conversations', { id: randomUUID(), responsibilityScopeId: ids.scope, kind: 'channel', title: 'Рабочий чат', memberIds: [] });
+    browser = await chromium.launch({ headless: true, ...(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {}) });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
+    await context.addInitScript(value => sessionStorage.setItem('ecl.session.v2', JSON.stringify({ session: value })), { ...admin, rememberedDevice: false });
+    const page = await context.newPage();
+    page.setDefaultTimeout(20000);
+    const errors = [];
+    const fleetRequests = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('request', request => {
+      const url = new URL(request.url());
+      if (url.pathname === '/api/v1/team/fleet-reports' || (url.pathname === '/api/v1/team/schedules' && request.method() === 'PUT')) {
+        fleetRequests.push({ path: url.pathname, method: request.method(), query: Object.fromEntries(url.searchParams), body: request.postDataJSON() });
+      }
+    });
+    await page.goto(`${fixture.origin}/?section=team`);
+    await page.getByRole('button', { name: 'Рабочий чат', exact: true }).click();
+    await page.getByLabel('Сообщение в чат', { exact: true }).fill('Черновик рабочего обсуждения');
+    await page.getByRole('button', { name: 'Расписание', exact: true }).click();
+    await page.getByRole('button', { name: 'Добавить расписание', exact: true }).click();
+    assert.equal(await page.getByLabel('Тип отчета', { exact: true }).count(), 0, 'Team schedules now show fleet reports directly');
+    assert.equal(await page.getByLabel('Время', { exact: true }).inputValue(), '18:00');
+    assert.equal(await page.getByLabel('День отчета', { exact: true }).inputValue(), '0');
+    assert.equal(await page.getByLabel('Периодичность', { exact: true }).isEnabled(), false);
+    assert.equal(await page.getByRole('group', { name: 'Источники отчета', exact: true }).count(), 0);
+    await page.getByText('Данные экипажного блока и городской доставки автоматически собираются из «Планирования».', { exact: true }).waitFor();
+    assert.equal(await page.locator('.team-schedule-editor').getByRole('checkbox').count(), 1, 'Only the schedule enabled switch remains');
+    assert.equal(await page.locator('.team-schedule-editor').getByText(/Без доступа к данным|Только общение|Одна ежедневная публикация на компанию/).count(), 0);
+    assert.equal(await page.getByText('Кому доступны новые сводки', { exact: true }).count(), 0);
+    const directory = path.resolve(__dirname, '../.local/team-fleet-reports-qa');
+    await fs.mkdir(directory, { recursive: true });
+    await page.screenshot({ path: path.join(directory, 'schedule-desktop.png'), fullPage: false });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.locator('.team-schedule-editor').scrollIntoViewIfNeeded();
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await page.screenshot({ path: path.join(directory, 'schedule-mobile.png'), fullPage: false });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole('button', { name: 'Сохранить расписание', exact: true }).click();
+    await page.getByRole('heading', { name: 'Выпуск · Ежедневно в 18:00', exact: true }).waitFor();
+    let saved = (await api('GET', `/team/schedules?responsibilityScopeId=${ids.scope}&reportKind=fleet_release`)).schedules;
+    assert.equal(saved.length, 1);
+    assert.deepEqual(saved[0].sourceScopeIds, [], 'New schedules always resolve operational data automatically');
+    assert.deepEqual(saved[0].recipientIds, []);
+    await page.getByRole('button', { name: 'Подготовить отчет', exact: true }).click();
+    let dialog = page.getByRole('dialog', { name: 'Отчет по выпуску в чат «Отчеты»', exact: true });
+    assert.equal(await dialog.getByText(/Источники:|Источников:|источникам расписания/).count(), 0);
+    await dialog.getByLabel('Дата отчета', { exact: true }).fill('2026-09-28');
+    assert.equal(await dialog.getByRole('button', { name: 'Опубликовать в Отчеты', exact: true }).isEnabled(), false);
+    const fleetUrl = url => url.pathname === '/api/v1/team/fleet-reports';
+    await page.route(fleetUrl, async route => {
+      const response = await route.fetch();
+      const report = await response.json();
+      await route.fulfill({ response, json: { ...report, byManager: [{ id: ids.admin, label: 'Тестовый ответственный', total: 4, onLine: 2, notReleased: 1, unconfirmed: 1 }] } });
+    });
+    await dialog.getByRole('button', { name: 'Предпросмотр', exact: true }).click();
+    await dialog.getByLabel('Предпросмотр отчета', { exact: true }).waitFor();
+    assert.ok((await dialog.getByLabel('Предпросмотр отчета', { exact: true }).innerText()).length > 100);
+    await dialog.getByRole('region', { name: 'Ответственные — для проверки', exact: true }).getByRole('rowheader', { name: 'Тестовый ответственный', exact: true }).waitFor();
+    assert.equal((await dialog.getByLabel('Предпросмотр отчета', { exact: true }).innerText()).includes('Тестовый ответственный'), false);
+    await page.unroute(fleetUrl);
+    await dialog.getByLabel('Дата отчета', { exact: true }).fill('2026-09-27');
+    assert.equal(await dialog.getByLabel('Предпросмотр отчета', { exact: true }).count(), 0);
+    assert.equal(await dialog.getByRole('button', { name: 'Опубликовать в Отчеты', exact: true }).isEnabled(), false);
+    await dialog.getByLabel('Дата отчета', { exact: true }).fill('2026-09-28');
+    await dialog.getByRole('button', { name: 'Предпросмотр', exact: true }).click();
+    await dialog.getByLabel('Предпросмотр отчета', { exact: true }).waitFor();
+    await page.route(fleetUrl, route => route.request().method() === 'POST'
+      ? route.fulfill({ status: 409, contentType: 'application/json', body: JSON.stringify({ message: 'Канал «Отчеты» находится в архиве.' }) }) : route.continue());
+    await dialog.getByRole('button', { name: 'Опубликовать в Отчеты', exact: true }).click();
+    await dialog.getByText('Канал «Отчеты» находится в архиве.', { exact: true }).waitFor();
+    assert.equal(await dialog.getByLabel('Дата отчета', { exact: true }).inputValue(), '2026-09-28');
+    assert.equal(await dialog.getByLabel('Предпросмотр отчета', { exact: true }).count(), 1);
+    await page.unroute(fleetUrl);
+    const published = page.waitForResponse(response => new URL(response.url()).pathname === '/api/v1/team/fleet-reports' && response.request().method() === 'POST');
+    await dialog.getByRole('button', { name: 'Опубликовать в Отчеты', exact: true }).click();
+    const result = await (await published).json();
+    assert.equal(result.conversationId, reports.id);
+    await page.locator(`[data-message-id="${result.messageId}"]`).waitFor();
+    await page.getByRole('heading', { name: '# Отчеты', exact: true }).waitFor();
+    await page.getByRole('button', { name: 'Отчет по выпуску', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: 'Отчет по выпуску в чат «Отчеты»', exact: true });
+    await dialog.getByLabel('Дата отчета', { exact: true }).fill('2026-09-28');
+    await dialog.getByRole('button', { name: 'Предпросмотр', exact: true }).click();
+    await dialog.getByLabel('Предпросмотр отчета', { exact: true }).waitFor();
+    await page.screenshot({ path: path.join(directory, 'preview-desktop.png'), fullPage: false });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    await page.screenshot({ path: path.join(directory, 'preview-mobile.png'), fullPage: false });
+    await dialog.getByRole('button', { name: 'Опубликовать в Отчеты', exact: true }).click();
+    await page.getByText('Отчет за эту дату уже опубликован; данные не изменились.', { exact: true }).waitFor();
+    const messages = await adminPool.query('SELECT id FROM team_messages WHERE conversation_id=$1', [reports.id]);
+    assert.equal(messages.rows.length, 1);
+    await page.getByRole('button', { name: 'Рабочий чат', exact: true }).click();
+    assert.equal(await page.getByLabel('Сообщение в чат', { exact: true }).inputValue(), 'Черновик рабочего обсуждения');
+    await page.getByRole('button', { name: 'Расписание', exact: true }).click();
+    await page.getByRole('button', { name: 'Добавить расписание', exact: true }).click();
+    await page.getByRole('button', { name: 'Сохранить расписание', exact: true }).click();
+    await page.getByRole('heading', { name: 'Выпуск · Ежедневно в 18:00', exact: true }).waitFor();
+    saved = (await api('GET', `/team/schedules?responsibilityScopeId=${ids.scope}&reportKind=fleet_release`)).schedules;
+    assert.equal(saved.length, 1);
+    await page.getByRole('button', { name: 'Добавить расписание', exact: true }).click();
+    await page.getByLabel('Чат для публикации', { exact: true }).selectOption(targetReports.id);
+    await page.getByRole('button', { name: 'Сохранить расписание', exact: true }).click();
+    await page.locator('.team-schedule-editor').waitFor({ state: 'detached' });
+    const targetSaved = (await api('GET', `/team/schedules?responsibilityScopeId=${targetScope}&reportKind=fleet_release`)).schedules;
+    assert.equal(targetSaved.length, 1);
+    assert.equal(targetSaved[0].conversationId, targetReports.id);
+    assert.equal(targetSaved[0].responsibilityScopeId, targetScope);
+    assert.deepEqual(targetSaved[0].sourceScopeIds, []);
+    await page.locator('.team-schedule-card').filter({ hasText: 'Я Компания получателя отчетов' }).getByRole('button', { name: 'Подготовить отчет', exact: true }).click();
+    dialog = page.getByRole('dialog', { name: 'Отчет по выпуску в чат «Отчеты»', exact: true });
+    await dialog.getByLabel('Дата отчета', { exact: true }).fill('2026-09-28');
+    await dialog.getByRole('button', { name: 'Предпросмотр', exact: true }).click();
+    await dialog.getByLabel('Предпросмотр отчета', { exact: true }).waitFor();
+    await dialog.getByRole('button', { name: 'Опубликовать в Отчеты', exact: true }).click();
+    await dialog.waitFor({ state: 'detached' });
+    assert.equal(Number((await adminPool.query('SELECT count(*) FROM team_messages WHERE conversation_id=$1', [targetReports.id])).rows[0].count), 1);
+    assert.ok(fleetRequests.some(item => item.path === '/api/v1/team/schedules' && item.method === 'PUT'));
+    assert.ok(fleetRequests.some(item => item.path === '/api/v1/team/fleet-reports' && item.method === 'GET'));
+    assert.ok(fleetRequests.some(item => item.path === '/api/v1/team/fleet-reports' && item.method === 'POST'));
+    for (const item of fleetRequests) {
+      assert.equal(Object.hasOwn(item.query, 'sourceScopeIds'), false, 'Preview delegates data selection to the server');
+      assert.equal(Object.hasOwn(item.body || {}, 'sourceScopeIds'), false, 'Saving and publishing delegate data selection to the server');
+    }
+    assert.deepEqual(errors, []);
+    console.log('PASS fleet reports browser: automatic operational data without source choices, 18:00 Moscow/current day defaults, preview/date invalidation, visible publish failure, ordinary report chat reuse, idempotent day publication, preserved composer draft, existing schedule reuse, explicit report chat target, desktop/mobile');
+  } finally {
+    if (browser) await browser.close();
+    await fixture.close();
+  }
+})().catch(error => { console.error(error.stack || error.message); process.exit(1); });

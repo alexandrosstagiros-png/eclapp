@@ -2,7 +2,7 @@
 const { BadRequestException } = require('@nestjs/common');
 const { SOURCES, sourceOwner } = require('./planning-sources');
 
-const STATUSES = Object.freeze(['work', 'reserve', 'paid_reserve', 'off', 'repair', 'sick', 'transferred', 'cancelled']);
+const STATUSES = Object.freeze(['work', 'reserve', 'paid_reserve', 'off', 'repair', 'sick', 'transferred', 'cancelled', 'no_work', 'no_driver', 'crew_shortage', 'failed']);
 const MAX_PLAN_BYTES = 450 * 1024;
 const MAX_EXTRA_FIELDS = 20;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -64,6 +64,41 @@ function extraFieldsInput(raw, rowLabel) {
     return result;
   });
 }
+function reportingInput(raw, row) {
+  if (raw === undefined) return undefined;
+  object(raw, 'данные выпуска');
+  keys(raw, ['block', 'fleetType', 'managerId', 'actualTrips', 'crewRequired', 'crewPresent', 'cityName', 'clientName'], 'данные выпуска');
+  const nullableChoice = (value, choices, label) => {
+    if (value == null) return null;
+    if (!choices.includes(value)) fail(`Некорректное поле «${label}».`);
+    return value;
+  };
+  const nullableCount = (value, min, max, label) => {
+    if (value == null) return null;
+    if (!Number.isSafeInteger(value) || value < min || value > max) fail(`Поле «${label}» должно быть целым от ${min} до ${max}.`);
+    return value;
+  };
+  const result = {
+    block: nullableChoice(raw.block, ['crew', 'city'], 'блок'),
+    fleetType: nullableChoice(raw.fleetType, ['own', 'subcontracted'], 'принадлежность машины'),
+    managerId: raw.managerId == null ? null : uuid(raw.managerId, 'ответственный менеджер'),
+    actualTrips: nullableCount(raw.actualTrips, 0, 999, 'фактические рейсы'),
+    crewRequired: nullableCount(raw.crewRequired, 1, 99, 'требуется человек в экипаже'),
+    crewPresent: nullableCount(raw.crewPresent, 0, 99, 'вышло человек в экипаже'),
+  };
+  for (const [key, label] of [['cityName', 'город выпуска'], ['clientName', 'клиент выпуска']]) {
+    if (raw[key] == null) continue;
+    const value = string(raw[key], 100, label).trim();
+    if (/[\u0000-\u001f]/.test(value)) fail(`Некорректное поле «${label}».`);
+    if (value) result[key] = value;
+  }
+  if (result.actualTrips > 0) {
+    if (!row.vehicleId) fail('Для фактического выпуска выберите машину.');
+    // Preserve real incidents, such as a release with an incomplete crew or a
+    // vehicle repaired after a run. The report exposes conflicting facts.
+  }
+  return result;
+}
 function planInput(body) {
   object(body, 'план');
   keys(body, ['businessDate', 'responsibilityScopeId', 'templateId', 'templateVersion', 'rows', 'version'], 'план');
@@ -77,7 +112,7 @@ function planInput(body) {
   const rows = body.rows.map((raw, index) => {
     const label = `строка ${index + 1}`;
     object(raw, label);
-    keys(raw, ['id', 'driverId', 'vehicleId', 'departureTime', 'status', 'confirmed', 'requestCreated', 'arrived', 'tripCount', 'comment', 'clientFields', 'extraFields'], label);
+    keys(raw, ['id', 'driverId', 'vehicleId', 'departureTime', 'status', 'confirmed', 'requestCreated', 'arrived', 'tripCount', 'comment', 'clientFields', 'extraFields', 'reporting'], label);
     const id = uuid(raw.id, label);
     if (seen.has(id)) fail('Идентификаторы строк плана должны быть уникальными.');
     seen.add(id);
@@ -93,6 +128,7 @@ function planInput(body) {
       if (!key || key.length > 100 || /[\u0000-\u001f]/.test(key) || ['__proto__', 'prototype', 'constructor'].includes(key)) fail(`Некорректное название поля клиента: ${label}.`);
       return [key, string(value, 2000, `поле клиента, ${label}`)];
     }));
+    const reporting = reportingInput(raw.reporting, { vehicleId: raw.vehicleId, status });
     return {
       id, driverId: raw.driverId == null ? null : uuid(raw.driverId, 'водитель'),
       vehicleId: raw.vehicleId == null ? null : uuid(raw.vehicleId, 'автомобиль'),
@@ -102,6 +138,7 @@ function planInput(body) {
       arrived: boolean(raw.arrived, 'прибыл'),
       comment: string(raw.comment ?? '', 2000, 'комментарий'), clientFields,
       extraFields: extraFieldsInput(raw.extraFields, label),
+      ...(reporting === undefined ? {} : { reporting }),
     };
   });
   if (Buffer.byteLength(JSON.stringify(rows), 'utf8') > MAX_PLAN_BYTES) fail('План слишком большой. Сократите комментарии и поля клиента.');

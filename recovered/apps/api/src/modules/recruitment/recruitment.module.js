@@ -397,6 +397,8 @@ for (const name of ['worklist', 'candidate','importRows','importRow']) Query()(R
 
 class RecruitmentModule {}
 const { OnboardingService, OnboardingController, PublicOnboardingController } = require('./recruitment-onboarding').createOnboardingComponents(RecruitmentService);
-Module({ imports: [IdentityAccessModule], controllers: [RecruitmentController, RecruitmentInvitationsController, PublicRecruitmentInvitationsController,OnboardingController,PublicOnboardingController],
-  providers: [RecruitmentService, RecruitmentInvitationsService,OnboardingService] })(RecruitmentModule);
+const { ContractService, ContractController } = require('./recruitment-contracts').createContractComponents(RecruitmentService);
+const DadataController = require('./recruitment-dadata').createDadataController(ContractService);
+Module({ imports: [IdentityAccessModule], controllers: [RecruitmentController, RecruitmentInvitationsController, PublicRecruitmentInvitationsController,OnboardingController,PublicOnboardingController,ContractController,DadataController],
+  providers: [RecruitmentService, RecruitmentInvitationsService,OnboardingService,ContractService] })(RecruitmentModule);
 module.exports = { RecruitmentModule, RecruitmentService };

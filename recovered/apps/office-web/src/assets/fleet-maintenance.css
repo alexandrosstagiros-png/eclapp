@@ -7,6 +7,40 @@
   color: var(--text, #172235);
   min-width: 0;
 }
+.fleet-price-analysis {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 18px 0;
+  color: var(--text, #172235);
+}
+.fleet-price-analysis * { box-sizing: border-box; }
+.fleet-price-analysis :is(h3, h4, p) { margin: 0; }
+.fleet-price-analysis > div { min-width: 0; }
+.fleet-price-analysis input, .fleet-price-analysis select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--line, #dce2e9);
+  border-radius: 8px;
+  color: inherit;
+  background: var(--field-bg, var(--surface, #fff));
+  font: inherit;
+}
+.fleet-price-analysis > button { justify-self: start; }
+.fleet-price-analysis button:disabled { opacity: .55; cursor: default; }
+.fleet-price-analysis :is(button, input, select, summary):focus-visible {
+  outline: 2px solid var(--blue, #2563eb);
+  outline-offset: 3px;
+}
+.fleet-price-analysis [aria-live] { display: grid; gap: 14px; }
+.fleet-price-analysis details p { padding-top: 8px; }
+.fleet-price-analysis summary { cursor: pointer; }
+.fleet-price-analysis td p { margin: 7px 0; }
+.fleet-price-analysis .fleet-table { min-width: 760px; }
 .fleet-workspace * {
   box-sizing: border-box;
 }
