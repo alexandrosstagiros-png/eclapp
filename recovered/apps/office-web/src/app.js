@@ -3,13 +3,14 @@ import { createRecruitmentPanel, createRecruitmentReminder, createRecruitmentInv
 import { createTendersWorkspace } from "./tenders.js";
 import { createDevelopmentWorkspace } from "./development.js";
 import { createDriverRequests } from "./driver-requests.js";
-import { createTeamWorkspace } from "./team.js";
+import { createTeamWorkspace, createNeuralSummary } from "./team.js";
+import { createNeuralWorkspace } from "./neural.js";
 import { createTeamTasks } from "./team-tasks.js";
 import { createTeamOutcomes } from "./team-outcomes.js";
 import { createProfileUI } from "./profile.js";
 import { createBirthdaysUI } from "./birthdays.js";
 import { createTeamNotificationCenter } from "./team-notifications.js";
-import { createFleetMaintenanceWorkspace } from "./fleet-maintenance.js";
+import { createFleetMaintenanceWorkspace, createWorkOrderPriceAnalysis } from "./fleet-maintenance.js";
 import { createFleetOperationsWorkspace } from "./fleet-operations.js";
 import { createAttachmentPhotos } from "./attachment-photos.js";
 import { createRecruitmentOnboarding } from "./recruitment-onboarding.js";
@@ -14453,7 +14454,7 @@ async function ze(c, d = {}, f, allowRefresh = true) {
             typeof detail.message === "string" && detail.message.length <= 500 &&
             !/[\u0000-\u001f\u007f]/.test(detail.message)) p = detail.message;
       } catch {}
-    if ((c.startsWith("/planning") || c.startsWith("/tenders") || c.startsWith("/development") || c.startsWith("/team") || c.startsWith("/profile") || c.startsWith("/fleet-") || c.startsWith("/communications/")) && [400, 403, 404, 409, 413, 429].includes(g.status))
+    if ((c.startsWith("/planning") || c.startsWith("/tenders") || c.startsWith("/development") || c.startsWith("/neural") || c.startsWith("/team") || c.startsWith("/profile") || c.startsWith("/fleet-") || c.startsWith("/communications/")) && [400, 403, 404, 409, 413, 429, 502, 503, 504].includes(g.status))
       try {
         const detail = await g.json();
         if (typeof detail.message === "string" && detail.message.length <= 800 &&
@@ -26523,6 +26524,7 @@ function Pg({ initData: c }) {
   });
 }
 const ej = {
+  document: n.jsx("path", { d: "M14 3H5v18h14V8l-5-5Zm0 0v5h5M8 12h8M8 16h8" }),
   people: n.jsxs(n.Fragment, { children: [n.jsx("circle", { cx: "9", cy: "7", r: "3" }), n.jsx("path", { d: "M3 21v-3a6 6 0 0 1 12 0v3M16 4a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v3" })] }),
   truck: n.jsxs(n.Fragment, {
     children: [
@@ -26845,7 +26847,7 @@ function nj({ mode, onSession, notice }) {
                     children: [
                       n.jsx("span", { children: "Москва" }),
                       n.jsx("span", { children: "Санкт-Петербург" }),
-                      n.jsx("span", { children: "Казань" }),
+                      n.jsx("span", { children: "Регионы" }),
                     ],
                   }),
                 ],
@@ -27506,6 +27508,7 @@ const onboardingPhotoComponents = createAttachmentPhotos({
 });
 const { OnboardingPanel, PublicOnboardingPanel } = createRecruitmentOnboarding(h, {
   request: ze,
+  authenticatedFetch,
   ...onboardingPhotoComponents,
 });
 const RecruitmentPanel = createRecruitmentPanel(h, { request: ze, OnboardingPanel });
@@ -27520,6 +27523,9 @@ const { ProfileSettings, ProfileAvatar, ProfileCard, ProfileAccountButton } = cr
 const { useBirthdayReminders, BirthdayReminder, BirthdaysWorkspace } = createBirthdaysUI(h, { request: ze });
 const TeamNotificationCenter = createTeamNotificationCenter(h, {request:ze});
 const TeamWorkspace = createTeamWorkspace(h, { request: ze, download: Wy, loadFile: loadTeamFile, DriverRequests, TeamTasks, TeamOutcomes, ProfileAvatar, ProfileCard });
+const NeuralSummary = createNeuralSummary(h, { request: ze, download: Wy, loadFile: loadTeamFile, DriverRequests, TeamTasks, TeamOutcomes, ProfileAvatar, ProfileCard });
+const WorkOrderPriceAnalysis = createWorkOrderPriceAnalysis(h, { request: ze });
+const NeuralWorkspace = createNeuralWorkspace(h, { request: ze, Summary: NeuralSummary, PriceAnalysis: WorkOrderPriceAnalysis });
 const FleetMaintenanceWorkspace = createFleetMaintenanceWorkspace(h, { request: ze, authenticatedFetch, OperationsWorkspace: FleetOperationsWorkspace });
 const RecruitmentReminder = createRecruitmentReminder(h, { request: ze });
 const RecruitmentInvitationPanel = createRecruitmentInvitationPanel(h, {
@@ -28160,6 +28166,7 @@ function MaxNotificationsPanel({ token, actor, session, onExpired }) {
 // Match the server's Team staff allowlist. Work location does not affect access.
 const TEAM_STAFF_ROLES = new Set(["dispatcher", "manager", "recruiter", "tender_specialist", "document_specialist", "mechanic", "access_admin", "auditor"]);
 const hasTeamAccess = (role) => TEAM_STAFF_ROLES.has(role);
+const canUseOnboarding = (role) => ["manager", "dispatcher", "recruiter", "access_admin"].includes(role);
 
 function ij({
   mode: c,
@@ -28172,8 +28179,10 @@ function ij({
   notice,
 }) {
   const [b, D] = h.useState(
+      canUseOnboarding(f.role) && (new URLSearchParams(window.location.search).get("section") === "onboarding" || (new URLSearchParams(window.location.search).get("section") === "recruitment" && new URLSearchParams(window.location.search).get("recruitmentTab") === "onboarding")) ? "onboarding" :
       new URLSearchParams(window.location.search).get("section") === "inspections" && ["driver", "mechanic", "dispatcher", "access_admin"].includes(f.role) ? "inspections" :
       new URLSearchParams(window.location.search).get("section") === "profile" ? "profile" :
+      new URLSearchParams(window.location.search).get("section") === "neural" && hasTeamAccess(f.role) ? "neural" :
       new URLSearchParams(window.location.search).get("section") === "birthdays" && f.role === "access_admin" && !f.impersonation ? "birthdays" :
       new URLSearchParams(window.location.search).get("section") === "team" && hasTeamAccess(f.role)
         ? "team"
@@ -28210,6 +28219,7 @@ function ij({
     L = f.role === "access_admin" && !f.impersonation,
     canPlan = ["manager", "dispatcher", "access_admin"].includes(f.role),
     canRecruit = ["manager", "dispatcher", "recruiter", "external_recruiter", "access_admin"].includes(f.role),
+    canOnboard = canUseOnboarding(f.role),
     canTender = ["tender_specialist", "access_admin"].includes(f.role),
     canDevelopment = f.role !== "external_recruiter",
     canTeam = hasTeamAccess(f.role),
@@ -28226,6 +28236,7 @@ function ij({
       ...(canTender ? [{ id: "tenders", label: "Тендеры" }] : []),
       ...(canPlan ? [{ id: "planning", label: "Планирование" }] : []),
       ...(canRecruit ? [{ id: "recruitment", label: "Рекрутинг" }] : []),
+      ...(canOnboard ? [{ id: "onboarding", label: "Оформление" }] : []),
       ...(y ? [{ id: "trips", label: "Рейсы" }] : []),
       ...(M ? [{ id: "inspections", label: "Контрольный осмотр" }] : []),
       ...(f.role === "driver"
@@ -28235,6 +28246,7 @@ function ij({
       ...(ee ? [{ id: "finance", label: "Финансы и 1С" }] : []),
       ...(!["external_recruiter", "tender_specialist"].includes(f.role) ? [{ id: "communications", label: "Связь с отделами" }] : []),
       ...(canTeam ? [{ id: "team", label: "Команда" }] : []),
+      ...(canTeam ? [{ id: "neural", label: "Нейросети" }] : []),
       { id:"profile", label:"Настройки" },
       ...(canDevelopment ? [{ id: "development", label: "Разработка" }] : []),
       ...(y ? [{ id: "guide", label: "Как проверить демо" }] : []),
@@ -28267,10 +28279,19 @@ function ij({
   }, [b, inspectionAttention.count]);
   const planningDirty = h.useRef(false);
   const recruitmentDirty = h.useRef(false);
+  const [onboardingCandidate, setOnboardingCandidate] = h.useState(null);
+  h.useEffect(() => {
+    if (b !== "onboarding" || !canOnboard) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("section", "onboarding");
+    if (url.searchParams.get("recruitmentTab") === "onboarding") url.searchParams.delete("recruitmentTab");
+    window.history.replaceState(null, "", url);
+  }, [b, canOnboard]);
   const tendersDirty = h.useRef(false);
   const fleetDirty = h.useRef(false);
   const developmentDirty = h.useRef(false);
   const teamDirty = h.useRef(false);
+  const neuralDirty = h.useRef(false);
   const profileDirty = h.useRef(false);
   const birthdaysDirty = h.useRef(false);
   const [teamNavigation, setTeamNavigation] = h.useState(null);
@@ -28314,11 +28335,14 @@ function ij({
   const [recruitmentReminderScope, setRecruitmentReminderScope] = h.useState("");
   function selectWorkspaceTab(next) {
     if (next === "team" && !canTeam) return false;
+    if (next === "neural" && !canTeam) return false;
+    if (next === "onboarding" && !canOnboard) return false;
     if (next === b) return true;
     if (birthdaysDirty.current && !window.confirm("В поздравлениях есть несохранённая дата рождения. Выйти без сохранения?")) return false;
     if (profileDirty.current && !window.confirm("В профиле есть несохранённые изменения. Выйти без сохранения?")) return false;
     if (communicationsDirty.current && !window.confirm("В обращениях есть неотправленный текст. Выйти без сохранения?")) return false;
     if (teamDirty.current && !window.confirm("В команде есть несохранённые изменения. Выйти без сохранения?")) return false;
+    if (neuralDirty.current && !window.confirm("В нейросетях есть несохранённые изменения. Выйти без сохранения?")) return false;
     if (developmentDirty.current && !window.confirm("В разработке есть несохранённые изменения. Выйти без сохранения?")) return false;
     if (fleetDirty.current && !window.confirm("В автопарке есть несохранённая форма. Выйти без сохранения?")) return false;
     if (
@@ -28328,7 +28352,7 @@ function ij({
       )
     )
       return false;
-    if (recruitmentDirty.current && !window.confirm("В рекрутинге есть несохранённые изменения. Выйти без сохранения?")) return false;
+    if (recruitmentDirty.current && !window.confirm(b === "onboarding" ? "В оформлении есть несохранённые изменения. Выйти без сохранения?" : "В рекрутинге есть несохранённые изменения. Выйти без сохранения?")) return false;
     if (tendersDirty.current && !window.confirm("В тендерах есть несохранённые изменения. Выйти без сохранения?")) return false;
     planningDirty.current = false;
     recruitmentDirty.current = false;
@@ -28336,11 +28360,14 @@ function ij({
     fleetDirty.current = false;
     developmentDirty.current = false;
     teamDirty.current = false;
+    neuralDirty.current = false;
     profileDirty.current = false;
     birthdaysDirty.current = false;
     communicationsDirty.current = false;
+    setOnboardingCandidate(null);
     const workspaceUrl = new URL(window.location.href);
-    if (["recruitment", "tenders", "fleet", "fleet-driver", "development", "team", "communications", "profile", "birthdays", "inspections"].includes(next)) workspaceUrl.searchParams.set("section", next);
+    if (workspaceUrl.searchParams.get("recruitmentTab") === "onboarding") workspaceUrl.searchParams.delete("recruitmentTab");
+    if (["onboarding", "recruitment", "tenders", "fleet", "fleet-driver", "development", "team", "neural", "communications", "profile", "birthdays", "inspections"].includes(next)) workspaceUrl.searchParams.set("section", next);
     else {
       workspaceUrl.searchParams.delete("section");
       setRecruitmentTaskRequest(0);
@@ -28443,11 +28470,12 @@ function ij({
     if (birthdaysDirty.current && !window.confirm("В поздравлениях есть несохранённая дата рождения. Выйти из кабинета без сохранения?")) return;
     if (communicationsDirty.current && !window.confirm("В обращениях есть неотправленный текст. Выйти из кабинета без сохранения?")) return;
     if (teamDirty.current && !window.confirm("В команде есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
+    if (neuralDirty.current && !window.confirm("В нейросетях есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
     if (profileDirty.current && !window.confirm("В профиле есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
     if (developmentDirty.current && !window.confirm("В разработке есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
     if (tendersDirty.current && !window.confirm("В тендерах есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
     if (fleetDirty.current && !window.confirm("В автопарке есть несохранённая форма. Выйти из кабинета без сохранения?")) return;
-    if (recruitmentDirty.current && !window.confirm("В рекрутинге есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
+    if (recruitmentDirty.current && !window.confirm(b === "onboarding" ? "В оформлении есть несохранённые изменения. Выйти из кабинета без сохранения?" : "В рекрутинге есть несохранённые изменения. Выйти из кабинета без сохранения?")) return;
     if (
       planningDirty.current &&
       !window.confirm(
@@ -28515,6 +28543,7 @@ function ij({
                         children: [
                           n.jsx(Rt, {
                             name:
+                              _.id === "onboarding" ? "document" :
                               (_.id === "recruitment" || _.id === "team" || _.id === "birthdays")
                                 ? "people"
                                 : _.id === "trips"
@@ -28645,7 +28674,7 @@ function ij({
                   adaptationLaunch.error && n.jsxs("div", { className: "error", role: "alert", children: [
                     n.jsx("p", { children: adaptationLaunch.error }),
                     n.jsx("button", { type: "button", className: "button secondary", onClick: () => {
-                      if ([birthdaysDirty, profileDirty, teamDirty, communicationsDirty, developmentDirty, fleetDirty, planningDirty, recruitmentDirty, tendersDirty].some(ref => ref.current)
+                      if ([birthdaysDirty, profileDirty, teamDirty, neuralDirty, communicationsDirty, developmentDirty, fleetDirty, planningDirty, recruitmentDirty, tendersDirty].some(ref => ref.current)
                         && !window.confirm("Есть несохранённые изменения. Повторить проверку адаптации и перейти к инструкциям?")) return;
                       adaptationChecked.current = false; setAdaptationRetry(value => value + 1);
                     }, children: "Проверить адаптацию" }),
@@ -28676,11 +28705,17 @@ function ij({
                         planningDirty.current = value;
                       },
                     }),
-                  b === "recruitment" && canRecruit && n.jsx(RecruitmentPanel, {
+                  ((b === "recruitment" && canRecruit) || (b === "onboarding" && canOnboard)) && n.jsx(RecruitmentPanel, {
+                    key: b,
+                    workspace: b,
+                    initialCandidate: onboardingCandidate,
+                    onOpenOnboarding: (candidate) => {
+                      if (selectWorkspaceTab("onboarding")) setOnboardingCandidate(candidate);
+                    },
                     token: d.accessToken,
                     actor: f,
                     onExpired: g,
-                    taskRequest: recruitmentTaskRequest,
+                    taskRequest: b === "recruitment" ? recruitmentTaskRequest : 0,
                     reminderScopeId: recruitmentReminderScope,
                     onDirtyChange: (value) => { recruitmentDirty.current = value; },
                   }),
@@ -28690,6 +28725,11 @@ function ij({
                   }),
                   b === "profile" && n.jsx(ProfileSettings, {key:f.id,token:d.accessToken,actor:f,onExpired:g,canTeam,onDirtyChange:value=>{profileDirty.current=value;}}),
                   b === "birthdays" && L && n.jsx(BirthdaysWorkspace, { reminders: birthdayReminders, onDirtyChange: value => { birthdaysDirty.current = value; } }),
+                  b === "neural" && canTeam && n.jsx(NeuralWorkspace, {
+                    token: d.accessToken, actor: f, onExpired: g,
+                    onDirtyChange: value => { neuralDirty.current = value; },
+                    onNavigate: target => { if (selectWorkspaceTab("team")) setTeamNavigation({ ...target, nonce: crypto.randomUUID() }); },
+                  }),
                   b === "team" && canTeam && n.jsx(TeamWorkspace, {
                     token: d.accessToken, actor: f, onExpired: g,
                     navigationRequest:teamNavigation,

@@ -185,7 +185,11 @@ class PlanningService {
       }
       drivers.rows.sort((a, b) => a.name.localeCompare(b.name, 'ru') || a.id.localeCompare(b.id));
       vehicles.rows.sort((a, b) => a.label.localeCompare(b.label, 'ru') || a.id.localeCompare(b.id));
-      return { drivers: drivers.rows.map(driverOption), vehicles: vehicles.rows.map(vehicleOption) };
+      const managers = await client.query(`SELECT u.id,u.display_name AS name FROM users u JOIN access_grants g ON g.user_id=u.id
+        WHERE u.role=ANY($5::text[]) AND u.active AND u.approved AND g.personal_data_visible
+          AND g.legal_entity_id=$1 AND g.region_id=$2 AND g.project_id=$3 AND g.responsibility_scope_id=$4
+        ORDER BY u.display_name,u.id`, [...params, ROLES]);
+      return { drivers: drivers.rows.map(driverOption), vehicles: vehicles.rows.map(vehicleOption), managers: managers.rows };
     });
   }
   async read(actor, date, scopeId) {
@@ -218,6 +222,13 @@ class PlanningService {
   async validateReferences(client, scope, rows) {
     const drivers = [...new Set(rows.map(row => row.driverId).filter(Boolean))];
     const vehicles = [...new Set(rows.map(row => row.vehicleId).filter(Boolean))];
+    const managers = [...new Set(rows.map(row => row.reporting?.managerId).filter(Boolean))];
+    if (managers.length) {
+      const allowed = await client.query(`SELECT u.id FROM users u JOIN access_grants g ON g.user_id=u.id
+        WHERE u.id=ANY($5::uuid[]) AND u.role=ANY($6::text[]) AND u.active AND u.approved AND g.personal_data_visible
+          AND g.legal_entity_id=$1 AND g.region_id=$2 AND g.project_id=$3 AND g.responsibility_scope_id=$4`, [...tuple(scope), managers, ROLES]);
+      if (allowed.rowCount !== managers.length) throw new BadRequestException('Ответственный менеджер недоступен в этой области. Обновите справочник.');
+    }
     // Imports take the exclusive counterpart so catalog changes cannot race a save.
     await client.query('SELECT pg_advisory_xact_lock_shared(hashtextextended($1,917042060))', [scope.responsibilityScopeId]);
     // A standalone catalog record cannot replace the access/lifecycle rules of
@@ -290,7 +301,7 @@ class PlanningService {
   async save(actor, body, correlationId) {
     const input = planInput(body);
     return this.database.transaction(async client => {
-      const driverIds = [...new Set(input.rows.map(row => row.driverId).filter(Boolean))];
+      const driverIds = [...new Set(input.rows.flatMap(row => [row.driverId, row.reporting?.managerId]).filter(Boolean))];
       const current = await this.current(client, actor, driverIds);
       const scope = this.scope(current, input.responsibilityScopeId);
       const existing = await this.lockPlan(client, scope, input);
@@ -301,7 +312,7 @@ class PlanningService {
   async saveCalendar(actor, body, correlationId) {
     const input = calendarInput(body);
     return this.database.transaction(async client => {
-      const driverIds = [...new Set(input.plans.flatMap(plan => plan.rows.map(row => row.driverId).filter(Boolean)))];
+      const driverIds = [...new Set(input.plans.flatMap(plan => plan.rows.flatMap(row => [row.driverId, row.reporting?.managerId]).filter(Boolean)))];
       const current = await this.current(client, actor, driverIds);
       const scope = this.scope(current, input.responsibilityScopeId);
       const prepared = [];

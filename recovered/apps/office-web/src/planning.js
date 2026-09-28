@@ -1,6 +1,6 @@
 import {
   PLANNING_TEMPLATES, suggestTemplate, templateFor, tomorrow, newPlanningRow,
-  clientValue, exportSections, eligibleRows, adoptTemplate, clientFieldIssues, columnOwner, extraFieldValue, newExtraField,
+  clientValue, exportSections, eligibleRows, adoptTemplate, clientFieldIssues, columnOwner, extraFieldValue, newExtraField, resetReportingFacts,
 } from './planning-model.js';
 import { FIELD_SOURCES } from './planning-fields.js';
 import { createPlanningBuilder } from './planning-builder.js';
@@ -11,11 +11,15 @@ const STATUSES = [
   ['work', 'В работе'], ['reserve', 'Резерв'], ['paid_reserve', 'Оплачиваемый резерв'],
   ['off', 'Выходной'], ['repair', 'Ремонт'], ['sick', 'Больничный'],
   ['transferred', 'Переброс'], ['cancelled', 'Отмена'],
+  ['no_work', 'Нет работы'], ['no_driver', 'Без водителя'], ['crew_shortage', 'Неполный экипаж'], ['failed', 'Срыв'],
 ];
 const FLAGS = [['confirmed', 'Выход подтверждён'], ['requestCreated', 'Заявка создана'], ['arrived', 'Прибыл']];
 const TABLE_COLUMNS = [
   ['driverId', 'Водитель'], ['vehicleId', 'Машина'], ['departureTime', 'Время выхода'],
   ['status', 'Статус'], ['tripCount', 'Рейсов'], ...FLAGS, ['comment', 'Комментарий менеджера'],
+  ['report:block', 'Блок отчёта'], ['report:fleetType', 'Принадлежность машины'], ['report:managerId', 'Ответственный за выпуск'],
+  ['report:cityName', 'Город выпуска'], ['report:clientName', 'Клиент выпуска'],
+  ['report:actualTrips', 'Рейсов на линии (факт)'], ['report:crewRequired', 'Требуется в экипаже'], ['report:crewPresent', 'Вышло в экипаже'],
 ].map(([id, label]) => ({ id, label }));
 const DEFAULT_COLUMNS = ['driverId', 'vehicleId', 'departureTime', 'status', 'tripCount', 'confirmed', 'comment'];
 const preferencesKey = actorId => `office:planning:view:v1:${encodeURIComponent(actorId)}`;
@@ -130,6 +134,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
     const [calendarDirty, setCalendarDirty] = useState(false);
     const [selection, setSelection] = useState(null);
     const [options, setOptions] = useState({ drivers: [], vehicles: [] });
+    const [reportDefaults, setReportDefaults] = useState({ block: '', managerId: '', cityName: '', clientName: '' });
     const [catalogs, setCatalogs] = useState([]);
     const [newAssignment, setNewAssignment] = useState(null);
     const pendingAssignment = useRef(null);
@@ -198,6 +203,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
       return () => { mounted.current = false; requestSequence.current += 1; callbacks.current.onDirtyChange?.(false); };
     }, []);
     useEffect(() => { setPreferences(readPreferences(actor?.id)); setColumnsOpen(false); }, [actor?.id]);
+    useEffect(() => { setReportDefaults({ block: '', managerId: '', cityName: '', clientName: '' }); }, [selection?.scopeId, selection?.date]);
     useEffect(() => {
       if (!actor?.id || preferences.ownerId !== actor.id) return;
       try {
@@ -243,7 +249,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
       const text = reason?.status === 401 ? 'Сессия закончилась. Войдите снова.'
         : reason?.status === 403 ? 'У вас нет доступа к этому плану.'
           : reason?.status === 409 ? 'План уже изменил другой менеджер. Ваши изменения сохранены на экране. Скопируйте нужные данные или загрузите актуальный план.'
-            : phase === 'save' && reason?.status === 400 ? 'Проверьте назначения и поля клиентской формы. Водитель или машина могли стать недоступны: обновите справочники и выберите доступные записи. Ваши изменения остались на экране.'
+            : phase === 'save' && reason?.status === 400 ? (reason.message || 'Проверьте назначения и поля клиентской формы. Водитель или машина могли стать недоступны: обновите справочники и выберите доступные записи. Ваши изменения остались на экране.')
               : phase === 'save' && reason?.status === 413 ? 'Объём плана превышает допустимый размер. Сократите длинные комментарии и дополнительные сведения или количество назначений, затем сохраните план. Ваши изменения остались на экране.'
                 : phase === 'options' ? 'Не удалось обновить водителей и машины. Ваш план остался на экране. Проверьте соединение и повторите обновление справочников.'
             : phase === 'save' ? 'Не удалось сохранить план. Ваши изменения остались на экране. Попробуйте ещё раз.'
@@ -321,7 +327,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
           rows: (document.rows || []).map((row) => ({ ...row, clientFields: { ...(row.clientFields || {}) } })),
           version: document.version || 0,
         };
-        setOptions({ drivers: choices.drivers || [], vehicles: choices.vehicles || [] });
+        setOptions({ drivers: choices.drivers || [], vehicles: choices.vehicles || [], managers: choices.managers || [] });
         setTemplates(catalog);
         setDefaultTemplateId(forms.defaultTemplateId);
         setSavedSnapshot(fingerprint(next));
@@ -368,7 +374,8 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
         const { value: previousValue, ...linked } = item;
         return linked;
       });
-      changeRow(row.id, { [kind]: value, clientFields, extraFields });
+      changeRow(row.id, { [kind]: value, clientFields, extraFields, confirmed: false, arrived: false, requestCreated: false,
+        ...(row.reporting ? { reporting: resetReportingFacts(row.reporting, kind === 'vehicleId') } : {}) });
     }
     function clientChange(row, key, value) {
       if (!Object.prototype.hasOwnProperty.call(row.clientFields, key) && Object.keys(row.clientFields).length >= 50) {
@@ -526,7 +533,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
       try {
         const result = await request(`/planning/options?responsibilityScopeId=${encodeURIComponent(plan.responsibilityScopeId)}`, {}, token);
         if (!mounted.current || sequence !== requestSequence.current) return;
-        setOptions({ drivers: result.drivers || [], vehicles: result.vehicles || [] });
+        setOptions({ drivers: result.drivers || [], vehicles: result.vehicles || [], managers: result.managers || [] });
         setMessage('Справочники обновлены. Проверьте выбранных водителей и машины, затем сохраните план.');
       } catch (reason) {
         if (mounted.current && sequence === requestSequence.current) fail(reason, 'options');
@@ -665,9 +672,55 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
       button('По умолчанию', () => updatePreferences({ columns: [...DEFAULT_COLUMNS, ...currentPreferences.columns.filter(id => id.startsWith('client:') && !tableColumns.some(column => column.id === id))] }), { className: 'planning-link' }));
     }
 
+    function reportingControl(row, key, props = {}) {
+      const value = row.reporting?.[key] ?? '';
+      const update = value => changeRow(row.id, { reporting: { ...row.reporting, [key]: value } });
+      if (key === 'cityName' || key === 'clientName') return h('input', { ...props, value, maxLength: 100,
+        placeholder: key === 'cityName' ? scope?.regionName || 'Город из области' : scope?.projectName || 'Клиент из области', onChange: event => update(event.target.value) });
+      if (key === 'block' || key === 'fleetType' || key === 'managerId') {
+        const choices = key === 'block' ? [['crew', 'Экипажный'], ['city', 'Городская доставка']]
+          : key === 'fleetType' ? [['own', 'Собственный'], ['subcontracted', 'Наёмный']]
+            : (options.managers || []).map(person => [person.id, person.name]);
+        return h('select', { ...props, value, onChange: event => update(event.target.value || null) },
+          h('option', { value: '' }, key === 'fleetType' ? 'Из справочника / не указано' : 'Не указано'),
+          value && !choices.some(([id]) => id === value) && h('option', { value }, 'Ранее выбранная запись недоступна'),
+          ...choices.map(([id, label]) => h('option', { key: id, value: id }, label)));
+      }
+      const max = key === 'actualTrips' ? 999 : 99, min = key === 'crewRequired' ? 1 : 0;
+      return h('input', { ...props, type: 'number', min, max, step: 1, value, placeholder: 'Не указано',
+        onChange: event => update(event.target.value === '' ? null : Number(event.target.value)) });
+    }
+    function renderReporting(row, index) {
+      return h('section', { className: 'planning-release-fields', 'aria-label': `Выпуск, назначение ${index + 1}` },
+        h('h4', null, 'Выпуск для ежедневного отчёта'),
+        h('div', { className: 'planning-assignment-grid' },
+          ...TABLE_COLUMNS.filter(column => column.id.startsWith('report:') && (row.reporting?.block === 'crew' || !column.id.startsWith('report:crew')))
+            .map(column => field(column.label, reportingControl(row, column.id.slice(7))))),
+        h('p', { className: 'planning-help' }, 'Факт — число рейсов этой машины за выбранный день. Пусто: использовать отметки рейсов; 0: машина не вышла. План и подтверждение выхода сами по себе не считаются выпуском.'),
+        row.reporting?.block === 'crew' && h('p', { className: 'planning-help' }, 'Состав экипажа указывается вместе с водителем. Для невыпуска выберите причину в статусе назначения.'));
+    }
+    function renderReportDefaults() {
+      return h('section', { className: 'planning-release-defaults surface', 'aria-label': 'Настройка ежедневного выпуска' },
+        h('h3', null, 'Ежедневный выпуск → Команда · Отчеты'),
+        h('p', { className: 'planning-help' }, 'Включите в план все учитываемые на день машины, в том числе не вышедшие, и укажите причину. Наёмный парк — подтверждённые на день машины. Доступный резерв подрядчиков не добавляйте как простой.'),
+        h('div', { className: 'planning-assignment-grid' },
+          field('Блок для назначений дня', h('select', { disabled: busy, value: reportDefaults.block, onChange: event => setReportDefaults(previous => ({ ...previous, block: event.target.value })) },
+            h('option', { value: '' }, 'Не менять'), h('option', { value: 'crew' }, 'Экипажный'), h('option', { value: 'city' }, 'Городская доставка'))),
+          field('Ответственный для назначений дня', h('select', { disabled: busy, value: reportDefaults.managerId, onChange: event => setReportDefaults(previous => ({ ...previous, managerId: event.target.value })) },
+            h('option', { value: '' }, 'Не менять'), ...(options.managers || []).map(person => h('option', { key: person.id, value: person.id }, person.name)))),
+          ...[['cityName', 'Город для назначений дня'], ['clientName', 'Клиент для назначений дня']].map(([key, label]) => field(label,
+            h('input', { disabled: busy, value: reportDefaults[key], maxLength: 100, placeholder: 'Не менять', onChange: event => setReportDefaults(previous => ({ ...previous, [key]: event.target.value })) }))),
+          button('Применить к назначениям дня', () => {
+            const patch = Object.fromEntries(Object.entries(reportDefaults).map(([key, value]) => [key, value.trim()]).filter(([, value]) => value));
+            setPlan(previous => ({ ...previous, rows: previous.rows.map(row => ({ ...row, reporting: { ...row.reporting, ...patch } })) }));
+            setMessage('Данные отчёта применены. Сохраните план, чтобы включить изменения в отчёт.');
+          }, { disabled: busy || !plan.rows.length || !Object.values(reportDefaults).some(value => value.trim()) })),
+        h('p', { className: 'planning-help' }, 'Факт выпуска и состав экипажа заполняются в карточке машины или соответствующих колонках таблицы. Публикация и расписание — в разделе «Команда».'));
+    }
     function renderTableCell(row, index, column) {
       if (column.column) return renderClientCell(row, index, column.column, true);
       const props = { 'aria-label': `${column.label}, назначение ${index + 1}`, disabled: saving || exporting || oneCSending };
+      if (column.id.startsWith('report:')) return reportingControl(row, column.id.slice(7), props);
       switch (column.id) {
         case 'driverId': case 'vehicleId':
           return h(SearchPicker, {
@@ -751,6 +804,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
             field('Рейсов', h('input', { type: 'number', min: 1, max: 999, step: 1, value: row.tripCount, onChange: (event) => changeRow(row.id, { tripCount: Math.min(999, Math.max(1, Math.trunc(Number(event.target.value) || 1))) }) }))),
           h('div', { className: 'planning-flags' }, ...FLAGS.map(([key, label]) => h('label', { key }, h('input', { type: 'checkbox', checked: Boolean(row[key]), onChange: (event) => changeRow(row.id, { [key]: event.target.checked }) }), label))),
           field('Комментарий менеджера', h('textarea', { value: row.comment || '', rows: 2, maxLength: 2000, placeholder: 'Детали назначения, изменения или договорённости', onChange: (event) => changeRow(row.id, { comment: event.target.value }) })),
+          renderReporting(row, index),
           incomplete && h('p', { className: 'planning-row-warning' }, 'Для выгрузки заполните водителя, машину и время выхода.'),
           renderClientFields(row, index),
           h('section', { className: 'planning-extra-section' },
@@ -846,6 +900,7 @@ export function createPlanningPanel(React, { request: rawRequest, download }) {
           button('Снять выбор', () => setOneCSelected([]), { className: 'planning-link', disabled: busy || !oneCSelected.length }))),
         h('div', { className: 'planning-metrics', 'aria-label': 'Итоги плана' },
           ...[['Назначений', stats.assigned], ['Рейсов к подаче', stats.trips], ['Подтверждено', `${stats.confirmed} / ${outputRows.length}`], ['В резерве', stats.reserve]].map(([label, value]) => h('div', { className: 'planning-metric', key: label }, h('span', null, label), h('strong', null, value)))),
+        view === 'assignments' && renderReportDefaults(),
         h('div', { className: 'planning-workbar' },
           h('div', { className: 'planning-tabs', role: 'group', 'aria-label': 'Вид плана' },
             button('Назначения', () => setView('assignments'), { className: '', 'aria-pressed': view === 'assignments' }),

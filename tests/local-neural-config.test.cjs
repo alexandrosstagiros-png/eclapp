@@ -1,0 +1,24 @@
+'use strict';
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { readNeuralEnvironment } = require('../integrations/local-app/neural-config.cjs');
+test('local neural keys are explicit, private and never leaked in validation errors', async t => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'neural-config-'));
+  t.after(() => fs.rm(dir, { recursive: true, force: true }));
+  const filename = path.join(dir, 'neural.json');
+  assert.deepEqual(await readNeuralEnvironment(filename), {});
+  await fs.writeFile(filename, JSON.stringify({ OPENAI_API_KEY: 'synthetic-key', YANDEX_FOLDER_ID: 'fixture-folder' }), { mode: 0o600 });
+  assert.deepEqual(await readNeuralEnvironment(filename), { OPENAI_API_KEY: 'synthetic-key', YANDEX_FOLDER_ID: 'fixture-folder' });
+  await fs.chmod(filename, 0o644);
+  await assert.rejects(readNeuralEnvironment(filename), /0600/);
+  await fs.chmod(filename, 0o600);
+  await fs.writeFile(filename, '{"OPENAI_API_KEY": "DO-NOT-ECHO"');
+  await assert.rejects(readNeuralEnvironment(filename), error => !error.message.includes('DO-NOT-ECHO') && /JSON/.test(error.message));
+  await fs.writeFile(filename, JSON.stringify({ DATABASE_URL: 'DO-NOT-ECHO' }));
+  await assert.rejects(readNeuralEnvironment(filename), /неизвестные поля/);
+  const link = path.join(dir, 'link.json'); await fs.symlink(filename, link);
+  await assert.rejects(readNeuralEnvironment(link), /обычным файлом/);
+});

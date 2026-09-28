@@ -43,6 +43,12 @@ async function createApp() {
     const teamMessageBody = (0, express_1.json)({ limit: "36mb" });
     const teamMessageEditBody = (0, express_1.json)({ limit: "64kb" });
     app.use((req, res, next) => {
+        if (req.method === 'PUT' && /^\/api\/v1\/neural\/settings\/?$/.test(req.path))
+            return importBody(req, res, next);
+        if (req.method === 'POST' && /^\/api\/v1\/recruitment\/contracts\/documents\/[a-f0-9-]+\/sign\/?$/i.test(req.path))
+            return uploadBody(req, res, next);
+        if (/^\/api\/v1\/recruitment\/contracts(?:\/|$)/.test(req.path))
+            return calendarBody(req, res, next);
         if (req.method === 'PUT' && /^\/api\/v1\/profile\/?$/.test(req.path))
             return importBody(req, res, next);
         if (['POST', 'PUT'].includes(req.method) && /^\/api\/v1\/team\/(tasks|outcomes)(?:\/[a-f0-9-]+)?\/?$/i.test(req.path))

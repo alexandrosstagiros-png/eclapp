@@ -1,4 +1,5 @@
 .local/
+/analysis/reports-20260928/
 node_modules/
 .env
 .env.*

@@ -29,6 +29,15 @@ const dateLabel = (value) =>
       }).format(new Date(value))
     : "—";
 const uid = () => crypto.randomUUID();
+const reportDate = (timeZone = "Europe/Moscow", dayOffset = 0) => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const part = (type) => parts.find((item) => item.type === type).value;
+  const date = new Date(`${part("year")}-${part("month")}-${part("day")}T12:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - dayOffset);
+  return date.toISOString().slice(0, 10);
+};
 const MAX_ATTACHMENTS = 5;
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const EMOJIS = [
@@ -196,6 +205,7 @@ export function createTeamWorkspace(
     TeamOutcomes,
     ProfileAvatar,
     ProfileCard,
+    summaryOnly = false,
   },
 ) {
   const { createElement: h, useState, useRef, useEffect } = React;
@@ -1885,7 +1895,8 @@ export function createTeamWorkspace(
       [revision, setRevision] = useState(0),
       [driverRequestsRefresh, setDriverRequestsRefresh] = useState(0),
       [metricsRefresh, setMetricsRefresh] = useState(0);
-    const [tab, setTab] = useState(initialTab),
+    const normalizeTab = (value) => summaryOnly ? (value === "schedules" ? "schedules" : "summaries") : (value === "summaries" ? "chat" : value);
+    const [tab, setTab] = useState(normalizeTab(initialTab)),
       [people, setPeople] = useState([]),
       [conversations, setConversations] = useState([]),
       [conversationId, setConversationId] = useState("");
@@ -1926,9 +1937,11 @@ export function createTeamWorkspace(
       [adaptationArticleId, setAdaptationArticleId] = useState("");
     const [summaries, setSummaries] = useState([]),
       [summaryId, setSummaryId] = useState(""),
+      [publicationChatId, setPublicationChatId] = useState(""),
       [sharing, setSharing] = useState(null),
       [schedules, setSchedules] = useState([]),
-      [scheduleForm, setScheduleForm] = useState(null);
+      [scheduleForm, setScheduleForm] = useState(null),
+      [fleetReport, setFleetReport] = useState(null);
     const [periodStart, setPeriodStart] = useState(() =>
         dateInput(Date.now() - 86400000),
       ),
@@ -2072,16 +2085,22 @@ export function createTeamWorkspace(
         "/team/response-metrics",
       ];
       let body = options.body ? JSON.parse(options.body) : null;
+      const summaryRequest = /^\/team\/(summaries|schedules)(\/|$)/.test(url.pathname) &&
+        url.searchParams.get("reportKind") !== "fleet_release" && body?.reportKind !== "fleet_release";
       if (method === "GET" && companyLists.includes(url.pathname)) {
         url.searchParams.delete("responsibilityScopeId");
       } else {
-        const targetScope = recordScope(path, body || {});
+        const targetScope = summaryRequest
+          ? body?.responsibilityScopeId || url.searchParams.get("responsibilityScopeId") || scopeId
+          : recordScope(path, body || {});
         if (url.searchParams.has("responsibilityScopeId"))
           url.searchParams.set("responsibilityScopeId", targetScope);
         if (body?.responsibilityScopeId)
           body = { ...body, responsibilityScopeId: targetScope };
       }
-      return (/^\/team\/(summaries|schedules)(\/|$)/.test(url.pathname) ? companyWorkRequest.current : request)(
+      const fleetSchedule = url.pathname === "/team/schedules" &&
+        (url.searchParams.get("reportKind") === "fleet_release" || body?.reportKind === "fleet_release");
+      return (!summaryOnly && !fleetSchedule && /^\/team\/(summaries|schedules)(\/|$)/.test(url.pathname) ? companyWorkRequest.current : request)(
         `${url.pathname}${url.search}`,
         { ...options, ...(body ? { body: JSON.stringify(body) } : {}) },
         tokenRef.current,
@@ -2206,6 +2225,23 @@ export function createTeamWorkspace(
           person.legalEntityIds.includes(legalEntityId),
       );
     };
+    const fleetScopes = workScopes.filter((scope) => scope.personalDataVisible === true);
+    const fleetAccessKey = fleetScopes.map((scope) => scope.responsibilityScopeId).sort().join(",");
+    const scopeCompany = (id) => scopes.find((scope) => scope.responsibilityScopeId === id)?.legalEntityId;
+    const fleetReportChats = conversations.filter((item) => item.kind === "channel" && item.visibility !== "private" &&
+      !item.archivedAt && !item.deletedAt && normal(item.title).replace(/ё/g, "е") === "отчеты" &&
+      workScopes.some((scope) => scope.responsibilityScopeId === item.responsibilityScopeId));
+    const reportChatFor = (id) => fleetReportChats.find((item) => scopeCompany(item.responsibilityScopeId) === scopeCompany(id));
+    const companyFleetScopes = (id) => fleetScopes.filter((scope) => scope.legalEntityId === scopeCompany(id));
+    const fleetScheduleFor = (id) => schedules.find((item) =>
+      item.reportKind === "fleet_release" && scopeCompany(item.responsibilityScopeId) === scopeCompany(id));
+    useEffect(() => {
+      if (fleetReport && (!canManage || fleetReport.accessKey !== fleetAccessKey ||
+        !workScopes.some((scope) => scope.responsibilityScopeId === fleetReport.responsibilityScopeId))) {
+        setFleetReport(null);
+        setError("Доступ к отчету изменился. Откройте его заново после проверки доступа.");
+      }
+    }, [canManage, workScopes, fleetAccessKey, fleetReport?.responsibilityScopeId]);
     const nameOf = (id) =>
       people.find((person) => person.id === id)?.displayName || "Сотрудник";
     const conversationTitle = (item) =>
@@ -2267,9 +2303,11 @@ export function createTeamWorkspace(
       setAdaptationArticleId("");
       setSummaries([]);
       setSummaryId("");
+      setPublicationChatId("");
       setSharing(null);
       setSchedules([]);
       setScheduleForm(null);
+      setFleetReport(null);
       setDrafts({});
       setDriverRequestsDirty(false);
       setTasksDirty(false);
@@ -2317,7 +2355,7 @@ export function createTeamWorkspace(
     useEffect(() => {
       const controller = new AbortController();
       resetWorkspace();
-      setTab(initialView.current.initialTab || "chat");
+      setTab(normalizeTab(initialView.current.initialTab || "chat"));
       setContextLoading(true);
       setScopes([]);
       setScopeId("");
@@ -2545,7 +2583,7 @@ export function createTeamWorkspace(
       for (const id of allowed) revokedConversations.current.delete(id);
       conversationsRef.current = items;
       setConversations(items);
-      if (selectFirst)
+      if (selectFirst && !summaryOnly)
         setConversationId((id) =>
           allowed.has(id)
             ? id
@@ -2577,13 +2615,17 @@ export function createTeamWorkspace(
       const results = await Promise.allSettled([
         api(`/team/people${suffix}`, { signal }),
         api(`/team/conversations${suffix}`, { signal }),
-        api(`/team/articles${suffix}`, { signal }),
-        api(`/team/summaries${suffix}`, { signal }),
+        summaryOnly ? Promise.resolve({ articles: [] }) : api(`/team/articles${suffix}`, { signal }),
+        summaryOnly ? api(`/team/summaries${suffix}`, { signal }) : Promise.resolve({ summaries: [] }),
         manage
-          ? api(`/team/schedules${suffix}`, { signal })
+          ? Promise.all([
+              ...(summaryOnly ? [api(`/team/schedules${suffix}`, { signal })] : []),
+              ...(!summaryOnly ? [...new Map(workScopesRef.current.map((scope) => [scope.legalEntityId, scope])).values()]
+                .map((scope) => api(`/team/schedules?responsibilityScopeId=${encodeURIComponent(scope.responsibilityScopeId)}&reportKind=fleet_release`, { signal })) : []),
+            ]).then((values) => ({ schedules: values.flatMap((value) => value.schedules || []) }))
           : Promise.resolve({ schedules: [] }),
-        api(`/team/mentions${suffix}`, { signal }),
-        api("/team/adaptation", { signal }),
+        summaryOnly ? Promise.resolve({ mentions: [] }) : api(`/team/mentions${suffix}`, { signal }),
+        summaryOnly ? Promise.resolve({}) : api("/team/adaptation", { signal }),
       ]);
       if (
         signal?.aborted ||
@@ -2742,7 +2784,7 @@ export function createTeamWorkspace(
       };
     }, [scopeId, scopeAvailable, tab, token]);
     useEffect(() => {
-      if (!scopeId || !scopeAvailable) return;
+      if (summaryOnly || !scopeId || !scopeAvailable) return;
       let controller,
         inFlight = false;
       const timer = window.setInterval(async () => {
@@ -5395,6 +5437,11 @@ export function createTeamWorkspace(
                   h(
                     "div",
                     { className: "team-conversation-tools" },
+                    canManage && conversation.kind === "channel" &&
+                      normal(conversation.title).replace(/ё/g, "е") === "отчеты" &&
+                      button("Отчет по выпуску", () => openFleetReport(conversation.responsibilityScopeId), {
+                        disabled: Boolean(busy),
+                      }),
                     h(ActionMenu, {
                       key: conversationId,
                       label: "Действия чата",
@@ -7292,6 +7339,18 @@ export function createTeamWorkspace(
         },
       );
     }
+    const publicationChats = conversations.filter((item) => !item.archivedAt && !item.deletedAt && item.canPost !== false &&
+      (item.visibility !== "private" || item.memberIds?.includes(actor?.id)) &&
+      scopeCompany(item.responsibilityScopeId) === scopeCompany(scopeId));
+    async function publishSummary(event) {
+      event.preventDefault();
+      if (!summary || !publicationChats.some((item) => item.id === publicationChatId)) return;
+      await mutate("summary-publish", () => api(`/team/summaries/${encodeURIComponent(summary.id)}/publish`, {
+        method: "POST", body: JSON.stringify({ responsibilityScopeId: scopeId, conversationId: publicationChatId }),
+      }), (result) => {
+        setNotice(result.reused ? "Эта сводка уже опубликована в выбранном чате. Повторное сообщение не создавалось." : "Сводка опубликована в выбранном чате команды.");
+      });
+    }
     function summariesView() {
       return h(
         "div",
@@ -7422,7 +7481,9 @@ export function createTeamWorkspace(
                   h(
                     "p",
                     { className: "team-extraction-note" },
-                    "Категории определены автоматически — проверьте выводы. Сводка выделяет фразы из переписки по ключевым словам; это не анализ внешней ИИ-модели.",
+                    summary.mode === "ai"
+                      ? `Обзор подготовлен моделью ${summary.ai?.provider || "ИИ"} / ${summary.ai?.model || ""}. Проверьте выводы. Категории ниже содержат дословные выдержки из источников.`
+                      : "Внешняя модель не настроена: сводка выделяет фразы из переписки по ключевым словам. Категории определены автоматически — проверьте выводы.",
                   ),
                   h(
                     "p",
@@ -7506,6 +7567,16 @@ export function createTeamWorkspace(
                         ? `Доступ предоставлен: ${summary.recipientIds.map(nameOf).join(", ")}`
                         : "Сводка доступна только администраторам области.",
                     ),
+                  canManage && h("form", { className: "team-sharing", onSubmit: publishSummary },
+                    h("h3", null, "Публикация в чат команды"),
+                    h("p", { className: "team-extraction-note", role: "note" }, "Сводка может содержать личную переписку и закрытые каналы. После публикации её текст увидят все участники выбранного чата. Проверьте содержание и аудиторию перед отправкой."),
+                    field("Чат для публикации", h("select", { value: publicationChatId, required: true, disabled: Boolean(busy), onChange: (event) => setPublicationChatId(event.target.value) },
+                      h("option", { value: "" }, "Выберите чат"),
+                      ...publicationChats.map((item) => h("option", { key: item.id, value: item.id }, conversationTitle(item))),
+                    )),
+                    !publicationChats.length && h("p", { className: "team-muted" }, "Нет доступных чатов для публикации в этой компании."),
+                    h("button", { type: "submit", className: "button team-primary", disabled: Boolean(busy) || !publicationChats.some((item) => item.id === publicationChatId) }, busy === "summary-publish" ? "Публикуем…" : "Опубликовать сводку в чат"),
+                  ),
                   sharing &&
                     h(
                       "form",
@@ -7552,28 +7623,138 @@ export function createTeamWorkspace(
         ),
       );
     }
-    function openSchedule(item) {
+    function openSchedule(item, reportKind = summaryOnly ? "conversation_summary" : "fleet_release", targetScope = scopeId) {
       if (
         scheduleForm &&
         !window.confirm("Удалить несохранённый черновик расписания?")
       )
         return;
+      const targetChat = reportKind === "fleet_release" && (reportChatFor(targetScope) || (fleetReportChats.length === 1 ? fleetReportChats[0] : null));
+      if (targetChat) targetScope = targetChat.responsibilityScopeId;
+      if (!item && reportKind === "fleet_release") item = fleetScheduleFor(targetScope);
       setScheduleForm(
         item
-          ? { ...item, recipientIds: [...item.recipientIds] }
+          ? { ...item, saved: true, reportKind: item.reportKind || "conversation_summary", conversationId: item.conversationId || (item.reportKind === "fleet_release" ? reportChatFor(item.responsibilityScopeId)?.id : undefined), recipientIds: [...(item.recipientIds || [])] }
           : {
-              id: uid(),
+              ...(reportKind === "conversation_summary" ? { id: uid() } : {}),
+              responsibilityScopeId: targetScope,
+              ...(targetChat ? { conversationId: targetChat.id } : {}),
+              reportKind,
               enabled: true,
               frequency: "daily",
-              time: "09:00",
+              time: reportKind === "fleet_release" ? "18:00" : "09:00",
               timeZone: "Europe/Moscow",
               weekday: 1,
               recipientIds: [],
+              reportDayOffset: 0,
             },
       );
     }
+    function openFleetReport(targetScope, item = fleetScheduleFor(targetScope)) {
+      setError("");
+      if (!item) {
+        const anchor = workScopes.some((scope) => scope.responsibilityScopeId === targetScope) ? targetScope : companyFleetScopes(targetScope)[0]?.responsibilityScopeId;
+        if (!anchor) {
+          setError("Нет доступа к данным для отчета по выпуску.");
+          return;
+        }
+        if (chooseTab("schedules")) openSchedule(null, "fleet_release", anchor);
+        return;
+      }
+      setFleetReport({
+        responsibilityScopeId: item.responsibilityScopeId,
+        conversationId: item.conversationId || reportChatFor(item.responsibilityScopeId)?.id,
+        accessKey: fleetAccessKey,
+        businessDate: reportDate(item.timeZone, item.reportDayOffset || 0),
+        timeZone: item.timeZone,
+        report: null,
+      });
+    }
+    async function previewFleetReport(event) {
+      event?.preventDefault();
+      const snapshot = fleetReport;
+      await mutate("fleet-preview", () => api(`/team/fleet-reports?${new URLSearchParams({
+        responsibilityScopeId: snapshot.responsibilityScopeId,
+        businessDate: snapshot.businessDate,
+        ...(snapshot.conversationId ? { conversationId: snapshot.conversationId } : {}),
+      })}`), (result) => setFleetReport((value) => value === snapshot ? { ...value, report: result.report || result } : value));
+    }
+    async function publishFleetReport() {
+      if (!fleetReport?.report) return;
+      const snapshot = fleetReport;
+      await mutate("fleet-publish", async () => {
+        const result = await api("/team/fleet-reports", { method: "POST", body: JSON.stringify({
+          responsibilityScopeId: snapshot.responsibilityScopeId,
+          businessDate: snapshot.businessDate,
+          ...(snapshot.conversationId ? { conversationId: snapshot.conversationId } : {}),
+        }) });
+        try {
+          const [list, detail] = await Promise.all([
+            api("/team/conversations"),
+            api(`/team/conversations/${encodeURIComponent(result.conversationId)}?responsibilityScopeId=${encodeURIComponent(result.responsibilityScopeId || snapshot.responsibilityScopeId)}`),
+          ]);
+          if (!list.conversations?.some((item) => item.id === result.conversationId) || !detail.conversation || detail.conversation.deletedAt || detail.conversation.archivedAt)
+            throw new Error("Чат «Отчеты» больше недоступен для публикации.");
+          return { ...result, list, detail };
+        } catch (reason) {
+          throw new Error(`Отчет опубликован, но открыть чат не удалось. ${fail(reason)}`);
+        }
+      }, (result) => {
+        listGeneration.current++;
+        applyConversationList(result.list.conversations);
+        navigationSourceVersion.current++;
+        selectedRef.current = result.conversationId;
+        setConversationId(result.conversationId);
+        setMessages(result.detail.messages || []);
+        setPagination({ hasMore: Boolean(result.detail.hasMore), nextBefore: result.detail.nextBefore || null });
+        setThreadId(null);
+        setTab("chat");
+        setQuery("");
+        setFleetReport(null);
+        setNotice(result.unchanged ? "Отчет за эту дату уже опубликован; данные не изменились." : "Отчет опубликован в чате «Отчеты».");
+      });
+    }
+    function fleetReportDialog() {
+      if (!fleetReport) return null;
+      return h(Dialog, {
+        title: "Отчет по выпуску в чат «Отчеты»",
+        className: "team-fleet-report-dialog",
+        busy: Boolean(busy),
+        onClose: () => setFleetReport(null),
+      }, h("div", { className: "team-dialog-body" },
+        errorBox(error),
+        h("p", { className: "team-muted" }, "Данные экипажного блока и городской доставки автоматически собираются из «Планирования»."),
+        h("p", null, `Чат «Отчеты» · ${scopes.find((scope) => scope.responsibilityScopeId === fleetReport.responsibilityScopeId)?.legalEntityName || "Компания"}`),
+        h("form", { className: "team-fleet-report-controls", onSubmit: previewFleetReport },
+          field("Дата отчета", h("input", { type: "date", required: true, value: fleetReport.businessDate, disabled: Boolean(busy), onChange: (event) => {
+            setFleetReport((value) => ({ ...value, businessDate: event.target.value, report: null }));
+            setError("");
+          } })),
+          h("p", { className: "team-muted" }, fleetReport.timeZone === "Europe/Moscow" ? "Московское время" : fleetReport.timeZone),
+          h("button", { type: "submit", className: "button", disabled: Boolean(busy) }, busy === "fleet-preview" ? "Собираем отчет…" : "Предпросмотр"),
+        ),
+        fleetReport.report && h("pre", { className: "team-fleet-report-preview", "aria-label": "Предпросмотр отчета" }, fleetReport.report.text),
+        fleetReport.report?.byManager?.length > 0 && h("section", { className: "team-fleet-managers" },
+          h("h3", null, "Ответственные — для проверки"),
+          h("p", { className: "team-muted" }, "Имена доступны только в предпросмотре; в общем чате — обезличено. Таблица ниже не публикуется."),
+          h("div", { className: "team-fleet-manager-table", role: "region", "aria-label": "Ответственные — для проверки", tabIndex: 0 },
+            h("table", null,
+              h("thead", null, h("tr", null, ...["Ответственный", "Машин", "На линии", "Не вышли", "Без факта"].map((label) => h("th", { key: label, scope: "col" }, label)))),
+              h("tbody", null, ...fleetReport.report.byManager.map((row, index) => h("tr", { key: row.id || index },
+                h("th", { scope: "row" }, row.label), ...[row.total, row.onLine, row.notReleased, row.unconfirmed].map((value, column) => h("td", { key: column }, value ?? "—")),
+              ))),
+            ),
+          ),
+        ),
+        h("div", { className: "team-actions" },
+          button(busy === "fleet-publish" ? "Публикуем…" : "Опубликовать в Отчеты", publishFleetReport, { className: "button team-primary", disabled: Boolean(busy) || !fleetReport.report }),
+          button("Закрыть", () => setFleetReport(null), { disabled: Boolean(busy) }),
+        ),
+      ));
+    }
     async function saveSchedule(event) {
       event.preventDefault();
+      const fleet = scheduleForm.reportKind === "fleet_release";
       await mutate(
         "schedule",
         () =>
@@ -7581,13 +7762,16 @@ export function createTeamWorkspace(
             method: "PUT",
             body: JSON.stringify({
               id: scheduleForm.id,
-              responsibilityScopeId: scopeId,
+              responsibilityScopeId: scheduleForm.responsibilityScopeId || scopeId,
+              reportKind: scheduleForm.reportKind || "conversation_summary",
               enabled: scheduleForm.enabled,
-              frequency: scheduleForm.frequency,
+              frequency: fleet ? "daily" : scheduleForm.frequency,
               time: scheduleForm.time,
               timeZone: scheduleForm.timeZone,
               weekday: Number(scheduleForm.weekday),
-              recipientIds: scheduleForm.recipientIds,
+              recipientIds: fleet ? [] : scheduleForm.recipientIds,
+              ...(fleet ? { reportDayOffset: Number(scheduleForm.reportDayOffset || 0) } : {}),
+              ...(scheduleForm.conversationId ? { conversationId: scheduleForm.conversationId } : {}),
             }),
           }),
         (result) => {
@@ -7599,12 +7783,14 @@ export function createTeamWorkspace(
           ]);
           setScheduleForm(null);
           setNotice(
-            "Расписание сохранено. Сводки будут появляться в разделе «Сводки».",
+            fleet ? "Расписание сохранено. Отчеты по выпуску будут ежедневно появляться в чате «Отчеты»." : "Расписание сохранено. Сводки будут появляться в разделе «Нейросети» и публиковаться в выбранный чат, если он указан.",
           );
         },
       );
     }
     function schedulesView() {
+      const fleet = scheduleForm?.reportKind === "fleet_release";
+      const reportCompanies = [...new Map(fleetScopes.map((scope) => [scope.legalEntityId, scope])).values()];
       return h(
         "div",
         { className: "team-schedules" },
@@ -7614,11 +7800,11 @@ export function createTeamWorkspace(
           h(
             "div",
             null,
-            h("h2", null, "Сводки по расписанию"),
+            h("h2", null, summaryOnly ? "Сводки по расписанию" : "Отчеты по выпуску по расписанию"),
             h(
               "p",
               { className: "team-muted" },
-              "Автоматическое создание и доступ для выбранных сотрудников внутри приложения.",
+              summaryOnly ? "Сводки сохраняются здесь и могут автоматически публиковаться в выбранный чат команды." : "Отчеты по выпуску — в чате «Отчеты». Сводки переписки перенесены в раздел «Нейросети».",
             ),
           ),
           button("Добавить расписание", () => openSchedule(), {
@@ -7631,6 +7817,44 @@ export function createTeamWorkspace(
             "form",
             { className: "team-schedule-editor", onSubmit: saveSchedule },
             h("h3", null, "Настройка расписания"),
+            !fleet && field("Чат для автоматической публикации", h("select", {
+              value: scheduleForm.conversationId || "", disabled: Boolean(busy),
+              onChange: (event) => setScheduleForm((value) => ({ ...value, conversationId: event.target.value || null })),
+            }, h("option", { value: "" }, "Только сохранить сводку, без публикации"),
+              scheduleForm.conversationId && !publicationChats.some((item) => item.id === scheduleForm.conversationId) && h("option", { value: scheduleForm.conversationId, disabled: true }, "Сохранённый чат недоступен"),
+              ...publicationChats.map((item) => h("option", { key: item.id, value: item.id }, conversationTitle(item))),
+            )),
+            !fleet && scheduleForm.conversationId && h("p", { className: "team-extraction-note", role: "note" }, "Каждая новая сводка будет отправлена всем участникам выбранного чата. В неё могут попасть личные сообщения и закрытые каналы; включайте публикацию только для подходящей аудитории."),
+            fleet && fleetReportChats.length === 1 && scheduleForm.conversationId === fleetReportChats[0].id && h("p", { className: "team-muted" }, "Публикация в чат «Отчеты»."),
+            fleet && (fleetReportChats.length > 1 || (fleetReportChats.length === 1 && scheduleForm.conversationId !== fleetReportChats[0].id)) && field("Чат для публикации", h("select", {
+              value: scheduleForm.conversationId || "", disabled: Boolean(busy),
+              onChange: (event) => {
+                const chat = fleetReportChats.find((item) => item.id === event.target.value);
+                if (!chat) return;
+                const existing = fleetScheduleFor(chat.responsibilityScopeId);
+                if (existing && existing.id !== scheduleForm.id) {
+                  setScheduleForm({ ...existing, saved: true, conversationId: existing.conversationId || chat.id, recipientIds: [] });
+                } else setScheduleForm((value) => ({ ...value,
+                  ...(scopeCompany(value.responsibilityScopeId) !== scopeCompany(chat.responsibilityScopeId) ? { id: undefined, saved: false } : {}),
+                  conversationId: chat.id, responsibilityScopeId: chat.responsibilityScopeId }));
+              },
+            },
+              !fleetReportChats.some((item) => item.id === scheduleForm.conversationId) && h("option", { value: scheduleForm.conversationId || "", disabled: true }, scheduleForm.conversationId ? "Сохраненный чат недоступен" : "Выберите существующий чат «Отчеты»"),
+              ...fleetReportChats.map((item) => h("option", { key: item.id, value: item.id }, `Отчеты · ${scopeLabel(scopes.find((scope) => scope.responsibilityScopeId === item.responsibilityScopeId) || {})} · ${scopes.find((scope) => scope.responsibilityScopeId === item.responsibilityScopeId)?.legalEntityName || "Компания"}`)),
+            )),
+            fleet && !fleetReportChats.length && h("p", { className: "team-muted" }, scheduleForm.conversationId
+              ? "Сохраненный чат «Отчеты» недоступен. Проверьте доступ и состояние канала."
+              : "Отчет появится в чате «Отчеты» выбранной компании. При первой публикации приложение создаст чат, если его еще нет."),
+            fleet && !scheduleForm.conversationId && reportCompanies.length > 1 && field("Компания отчета", h("select", {
+              value: scopeCompany(scheduleForm.responsibilityScopeId), disabled: Boolean(busy) || scheduleForm.saved,
+              onChange: (event) => {
+                const anchor = reportCompanies.find((scope) => scope.legalEntityId === event.target.value)?.responsibilityScopeId;
+                const existing = fleetScheduleFor(anchor);
+                setScheduleForm((value) => existing
+                  ? { ...existing, saved: true, recipientIds: [] }
+                  : { ...value, responsibilityScopeId: anchor });
+              },
+            }, ...reportCompanies.map((scope) => h("option", { key: scope.legalEntityId, value: scope.legalEntityId }, scope.legalEntityName || "Компания")))),
             h(
               "div",
               { className: "team-schedule-fields" },
@@ -7640,7 +7864,7 @@ export function createTeamWorkspace(
                   "select",
                   {
                     value: scheduleForm.frequency,
-                    disabled: Boolean(busy),
+                    disabled: Boolean(busy) || fleet,
                     onChange: (event) =>
                       setScheduleForm((value) => ({
                         ...value,
@@ -7667,20 +7891,23 @@ export function createTeamWorkspace(
               ),
               field(
                 "Часовой пояс",
-                h(
-                  "select",
-                  {
-                    value: scheduleForm.timeZone,
-                    disabled: Boolean(busy),
-                    onChange: (event) =>
-                      setScheduleForm((value) => ({
-                        ...value,
-                        timeZone: event.target.value,
-                      })),
-                  },
-                  h("option", { value: "Europe/Moscow" }, "Москва · UTC+3"),
-                ),
+                fleet ? h("input", {
+                  value: scheduleForm.timeZone,
+                  required: true,
+                  placeholder: "Europe/Moscow",
+                  disabled: Boolean(busy),
+                  onChange: (event) => setScheduleForm((value) => ({ ...value, timeZone: event.target.value })),
+                }) : h("select", {
+                  value: scheduleForm.timeZone,
+                  disabled: Boolean(busy),
+                  onChange: (event) => setScheduleForm((value) => ({ ...value, timeZone: event.target.value })),
+                }, h("option", { value: "Europe/Moscow" }, "Москва · UTC+3")),
               ),
+              fleet && field("День отчета", h("select", {
+                value: scheduleForm.reportDayOffset || 0,
+                disabled: Boolean(busy),
+                onChange: (event) => setScheduleForm((value) => ({ ...value, reportDayOffset: Number(event.target.value) })),
+              }, h("option", { value: 0 }, "Текущий день"), h("option", { value: 1 }, "Предыдущий день"))),
               scheduleForm.frequency === "weekly" &&
                 field(
                   "День недели",
@@ -7709,6 +7936,7 @@ export function createTeamWorkspace(
                   ),
                 ),
             ),
+            fleet && h("p", { className: "team-muted" }, "Данные экипажного блока и городской доставки автоматически собираются из «Планирования»."),
             h(
               "label",
               { className: "team-checkbox" },
@@ -7724,7 +7952,7 @@ export function createTeamWorkspace(
               }),
               "Расписание включено",
             ),
-            h(RecipientPicker, {
+            !fleet && h(RecipientPicker, {
               people: people.filter((person) =>
                 person.workResponsibilityScopeIds?.includes(scheduleForm.responsibilityScopeId || scopeId),
               ),
@@ -7779,18 +8007,22 @@ export function createTeamWorkspace(
                     h(
                       "h3",
                       null,
-                      `${item.frequency === "weekly" ? "Еженедельно" : "Ежедневно"} в ${item.time}`,
+                      `${item.reportKind === "fleet_release" ? "Выпуск · " : ""}${item.frequency === "weekly" ? "Еженедельно" : "Ежедневно"} в ${item.time}`,
                     ),
+                    item.reportKind === "fleet_release" && h("p", null,
+                      scopes.find((scope) => scope.responsibilityScopeId === item.responsibilityScopeId)?.legalEntityName || "Компания чата"),
                     h(
                       "p",
                       { className: "team-muted" },
-                      `${item.timeZone} · Получателей: ${item.recipientIds.length}`,
+                      item.reportKind === "fleet_release"
+                        ? `${item.timeZone === "Europe/Moscow" ? "Московское время" : item.timeZone} · ${item.reportDayOffset ? "За предыдущий день" : "За текущий день"} · Чат «Отчеты»`
+                        : `${item.timeZone} · Получателей: ${item.recipientIds.length}${item.conversationId ? ` · Чат: ${conversations.find((chat) => chat.id === item.conversationId)?.title || "выбранный чат"}` : " · Без публикации в чат"}`,
                     ),
                     item.nextRunAt &&
                       h(
                         "p",
                         null,
-                        `Следующая сводка: ${dateLabel(item.nextRunAt)}`,
+                        `Следующая публикация: ${dateLabel(item.nextRunAt)}`,
                       ),
                     item.lastRunAt &&
                       h(
@@ -7803,9 +8035,10 @@ export function createTeamWorkspace(
                         `Последний запуск не завершён: ${item.lastError}`,
                       ),
                   ),
-                  button("Изменить", () => openSchedule(item), {
-                    disabled: Boolean(busy),
-                  }),
+                  h("div", { className: "team-actions" },
+                    button("Изменить", () => openSchedule(item), { disabled: Boolean(busy) }),
+                    item.reportKind === "fleet_release" && button("Подготовить отчет", () => openFleetReport(item.responsibilityScopeId, item), { disabled: Boolean(busy) }),
+                  ),
                 ),
               ),
             )
@@ -7826,13 +8059,16 @@ export function createTeamWorkspace(
         h(
           "div",
           null,
-          h("p", { className: "team-eyebrow" }, "Корпоративная среда"),
-          h("h1", null, "Команда"),
-          h("p", null, "Общение, знания и решения в одном пространстве"),
+          h("p", { className: "team-eyebrow" }, summaryOnly ? "Нейросети" : "Корпоративная среда"),
+          h(summaryOnly ? "h2" : "h1", null, summaryOnly ? "Сводка сообщений" : "Команда"),
+          h("p", null, summaryOnly ? "Итоги переписки, доступ коллег и публикация в чат" : "Общение, знания и решения в одном пространстве"),
         ),
         h(
           "div",
           { className: "team-scope-control" },
+          summaryOnly && field("Область переписки", h("select", { value: scopeId, disabled: Boolean(busy) || contextLoading, onChange: (event) => chooseScope(event.target.value) },
+            ...workScopes.map((scope) => h("option", { key: scope.responsibilityScopeId, value: scope.responsibilityScopeId }, [scope.legalEntityName, scopeLabel(scope)].filter(Boolean).join(" · "))),
+          )),
           button(
             "Обновить",
             scopeId ? refresh : () => setRevision((value) => value + 1),
@@ -7841,7 +8077,7 @@ export function createTeamWorkspace(
                 contextLoading ||
                 Boolean(busy) ||
                 Boolean(scopeId && !scopeAvailable),
-              "aria-label": "Обновить команду",
+              "aria-label": summaryOnly ? "Обновить сводки" : "Обновить команду",
             },
           ),
         ),
@@ -7854,11 +8090,12 @@ export function createTeamWorkspace(
       ),
       errorBox(error),
       notice && h("div", { className: "team-notice", role: "status" }, notice),
+      canManage && fleetReportDialog(),
       contextLoading
         ? h(
             "p",
             { className: "team-loading" },
-            "Загружаем пространство команды…",
+            summaryOnly ? "Загружаем сводки…" : "Загружаем пространство команды…",
           )
         : !scopeId || !scopeAvailable
           ? empty(
@@ -7870,8 +8107,8 @@ export function createTeamWorkspace(
               null,
               h(
                 "nav",
-                { className: "team-tabs", "aria-label": "Разделы команды" },
-                ...[
+                { className: "team-tabs", "aria-label": summaryOnly ? "Разделы сводок" : "Разделы команды" },
+                ...(summaryOnly ? [["summaries", "Сводки"], ...(canManage ? [["schedules", "Расписание сводок"]] : [])] : [
                   ["chat", "Обсуждения"],
                   [
                     "mentions",
@@ -7884,14 +8121,13 @@ export function createTeamWorkspace(
                   ...(TeamOutcomes ? [["outcomes", "Итоги"]] : []),
                   ["knowledge", "База знаний"],
                   ...(hasAdaptation ? [["adaptation", "Адаптация"]] : []),
-                  ["summaries", "Сводки"],
                   ...(canManage
                     ? [
                         ["response-metrics", "Скорость ответов"],
                         ["schedules", "Расписание"],
                       ]
                     : []),
-                ].map(([id, label]) =>
+                ]).map(([id, label]) =>
                   button(label, () => chooseTab(id), {
                     key: id,
                     className: `team-tab${tab === id ? " is-selected" : ""}`,
@@ -8387,4 +8623,9 @@ export function createTeamWorkspace(
         ),
     );
   };
+}
+
+// Reuses source inspection, sharing and durable schedule controls in the Neural section.
+export function createNeuralSummary(React, dependencies) {
+  return createTeamWorkspace(React, { ...dependencies, summaryOnly: true });
 }

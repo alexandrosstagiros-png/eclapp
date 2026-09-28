@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MIT
+import { createRecruitmentBoardDrag } from './recruitment-board-drag.js';
+import { createHhPublicationFields, hhVacancyDraft, hhVacancyUrl } from './recruitment-hh.js';
 // Native recruiting UI. Conceptual CRM patterns only; no EspoCRM source included.
 const STAGES = [
   ['new', 'Новый'], ['contact', 'Первый контакт'], ['qualified', 'Квалификация'], ['interview', 'Собеседование'], ['security', 'Проверка СБ'],
@@ -6,6 +8,7 @@ const STAGES = [
   ['reserve', 'Резерв'], ['rejected', 'Отказ'],
 ];
 const KINDS = [['driver', 'Водитель'], ['carrier', 'Перевозчик']];
+const REQUEST_STATUSES = [['open', 'Открыта'], ['paused', 'Приостановлена'], ['closed', 'Закрыта']];
 const SOURCES = [['manual', 'Вручную'], ['avito', 'Авито'], ['ati', 'АТИ'], ['hh', 'hh.ru'], ['referral', 'От водителя'], ['vehicle_sticker', 'Наклейка на автомобиле'], ['telegram', 'Telegram'], ['whatsapp', 'WhatsApp'], ['rabota_ru', 'Работа.ру'], ['superjob', 'SuperJob'], ['joblab', 'JobLab'], ['profi', 'Профи'], ['other', 'Другой источник']];
 const WORK_VIEWS = [['all', 'Все кандидаты'], ['new', 'Новые'], ['today', 'На сегодня'], ['overdue', 'Просрочено'], ['security', 'Ожидают СБ'], ['starts', 'Ближайшие выходы'], ['no_next', 'Без следующего шага']];
 const CONTACT_RESULTS = [['inquiry', 'Новое обращение'], ['connected', 'Связались'], ['no_answer', 'Не ответил'], ['callback', 'Перезвонить'], ['thinking', 'Думает'], ['declined', 'Не заинтересован']];
@@ -137,6 +140,8 @@ export function createRecruitmentReminder(React, { request }) {
 
 export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
   const { createElement: h, useState, useEffect, useMemo, useRef } = React;
+  const useRecruitmentBoardDrag = createRecruitmentBoardDrag(React);
+  const HhPublicationFields = createHhPublicationFields(React);
   const button = (label, onClick, props = {}) => h('button', { type: 'button', className: 'button', onClick, ...props }, label);
   const badge = (label, tone = '') => h('span', { className: `recruitment-badge ${tone}` }, label);
   const hhLink = (url, label = 'Перейти на hh ↗') => safeHh(url) ? h('a', { className: 'recruitment-link', href: safeHh(url), target: '_blank', rel: 'noopener noreferrer' }, label) : null;
@@ -144,96 +149,6 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     h('span', null, label), React.cloneElement(input, { 'aria-label': input.props['aria-label'] || label }), hint && h('small', null, hint));
   const empty = (title, description, action) => h('div', { className: 'recruitment-empty' },
     h('div', { className: 'recruitment-empty-mark', 'aria-hidden': true }, '＋'), h('h3', null, title), h('p', null, description), action);
-
-  function ImportRowsPanel({ token, responsibilityScopeId, refreshKey, onError, onCandidate }) {
-    const [filters, setFilters] = useState({ status: 'all', sheet: '', search: '', recruiter: '' });
-    const [page, setPage] = useState(1), [result, setResult] = useState(null), [loading, setLoading] = useState(true);
-    const [selectedId, setSelectedId] = useState(null), [detail, setDetail] = useState(null), [detailBusy, setDetailBusy] = useState(false);
-    const callbacks = useRef({ onError, onCandidate });
-    callbacks.current = { onError, onCandidate };
-    const query = scopeQuery(responsibilityScopeId, { page: String(page), pageSize: '50', ...filters });
-    const changeFilter = (key, value) => { setFilters(current => ({ ...current, [key]: value })); setPage(1); };
-    const statuses = [['all', 'Все строки'], ['imported', 'Есть карточка'], ['review', 'Требуют разбора'], ['archive', 'Архив и справочники']];
-    const statusName = value => statuses.find(([id]) => id === value)?.[1] || 'Требует уточнения';
-    const plain = value => value == null || value === '' ? '—' : typeof value === 'object' ? JSON.stringify(value) : String(value);
-    const issueLabels = {
-      invalid_fullName: 'Имя отсутствует или требует исправления', invalid_city: 'Город отсутствует или требует исправления',
-      invalid_phone: 'Телефон отсутствует или некорректен', unverified_inquiry_date: 'Дата обращения не подтверждена',
-      unknown_source: 'Источник требует уточнения', unknown_recruiter: 'Исходный рекрутер не указан',
-      phone_name_conflict_requires_review: 'Один телефон записан на разные имена', cross_sheet_phone_requires_review: 'Телефон встречается в обоих направлениях',
-      repeat_inquiry_same_name_phone: 'Повторное обращение того же кандидата',
-      excluded_example: 'Пример из исходного файла', no_candidate_identifiers: 'Строка без имени и телефона',
-      source_row_without_candidate: 'Исходная строка без карточки кандидата', technical_source_row: 'Техническая строка исходного листа',
-    };
-    const issues = item => Array.isArray(item.issues) ? item.issues.map(issue => typeof issue === 'string' ? issueLabels[issue] || 'Требует уточнения' : issue.message || issue.label || 'Требует уточнения').join('; ') : item.issues ? plain(item.issues) : '';
-    useEffect(() => { setPage(1); setSelectedId(null); setDetail(null); }, [responsibilityScopeId]);
-    useEffect(() => {
-      const controller = new AbortController(); let active = true;
-      setLoading(true);
-      const timer = setTimeout(() => request(`/recruitment/import-rows?${query}`, { signal: controller.signal }, token).then(data => {
-        if (active) setResult({ ...data, responsibilityScopeId });
-      }).catch(reason => { if (active && reason?.name !== 'AbortError') { setResult(null); callbacks.current.onError(reason); } }).finally(() => { if (active) setLoading(false); }), filters.search ? 200 : 0);
-      return () => { active = false; clearTimeout(timer); controller.abort(); };
-    }, [token, query, refreshKey]);
-    useEffect(() => {
-      if (!selectedId) return;
-      const controller = new AbortController(); let active = true;
-      setDetail(null); setDetailBusy(true);
-      request(`/recruitment/import-row?${scopeQuery(responsibilityScopeId, { id: selectedId })}`, { signal: controller.signal }, token).then(data => {
-        if (active) setDetail(data);
-      }).catch(reason => { if (active && reason?.name !== 'AbortError') { setSelectedId(null); callbacks.current.onError(reason); } }).finally(() => { if (active) setDetailBusy(false); });
-      return () => { active = false; controller.abort(); };
-    }, [token, responsibilityScopeId, selectedId]);
-    useEffect(() => {
-      if (!selectedId) return;
-      const element = document.querySelector('.recruitment-import-dialog'), previous = document.activeElement;
-      element?.querySelector('button')?.focus();
-      const keydown = event => {
-        if (event.key === 'Escape') { event.preventDefault(); setSelectedId(null); }
-        if (event.key === 'Tab') {
-          const nodes = [...element.querySelectorAll('button:not([disabled]), a[href]')];
-          if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes[nodes.length - 1]?.focus(); }
-          else if (!event.shiftKey && document.activeElement === nodes[nodes.length - 1]) { event.preventDefault(); nodes[0]?.focus(); }
-        }
-      };
-      element?.addEventListener('keydown', keydown);
-      return () => { element?.removeEventListener('keydown', keydown); previous?.focus?.(); };
-    }, [selectedId]);
-    const data = result?.responsibilityScopeId === responsibilityScopeId ? result : null;
-    const openCandidate = candidateId => { setSelectedId(null); callbacks.current.onCandidate(candidateId); };
-    return h('div', { className: 'recruitment-import-view' },
-      h('section', { className: 'recruitment-surface recruitment-import-intro' }, h('h3', null, 'История из Excel'),
-        h('p', null, 'Исходные рекрутеры и значения сохранены как в файле. Администратор — технический ответственный за разбор, а не автор прежней работы.'),
-        h('p', null, 'Пригодные карточки перенесены в архив, чтобы старые обращения не стали новыми задачами. Откройте карточку, проверьте актуальность данных и назначьте ответственного перед продолжением подбора.'),
-        h('p', { className: 'recruitment-meta' }, 'Галочки, этапы и даты в исходной книге — исторические сведения. Они не подтверждают выходы или решения СБ в приложении.'),
-        data?.fileName && h('p', { className: 'recruitment-meta' }, `Файл: ${plain(data.fileName)}${data.importedAt ? ` · загружен ${dateLabel(data.importedAt, true)}` : ''}`)),
-      h('p', { className: 'recruitment-meta' }, 'Показатели считают строки исходного файла. Несколько строк могут относиться к одной карточке кандидата.'),
-      h('div', { className: 'recruitment-import-counts', 'aria-label': 'Результат переноса Excel' }, ...statuses.map(([id, label]) => button(h(React.Fragment, null, h('span', null, label), h('strong', null, data?.counts?.[id] ?? '—')), () => changeFilter('status', id), { key: id, 'aria-pressed': filters.status === id }))),
-      h('div', { className: 'recruitment-filters recruitment-import-filters' },
-        field('Поиск по Excel', h('input', { type: 'search', value: filters.search, placeholder: 'Имя, телефон, город или место', onChange: event => changeFilter('search', event.target.value) })),
-        field('Лист Excel', h('select', { value: filters.sheet, onChange: event => changeFilter('sheet', event.target.value) }, h('option', { value: '' }, 'Все листы'), ...(data?.sheets || []).map(sheet => h('option', { key: sheet, value: sheet }, sheet)))),
-        field('Результат переноса', h('select', { value: filters.status, onChange: event => changeFilter('status', event.target.value) }, ...statuses.map(([id, label]) => h('option', { key: id, value: id }, label)))),
-        field('Рекрутер в исходном файле', h('select', { value: filters.recruiter, onChange: event => changeFilter('recruiter', event.target.value) }, h('option', { value: '' }, 'Все исходные рекрутеры'), ...(data?.recruiters || []).map(name => h('option', { key: name, value: name }, name))))),
-      loading ? h('div', { className: 'recruitment-loading', role: 'status' }, 'Загружаем строки Excel…') : data?.items?.length ? h('div', { className: 'recruitment-table-scroll recruitment-import-scroll', tabIndex: 0, 'aria-label': 'Исходные строки Excel' }, h('table', { className: 'recruitment-table recruitment-import-table' },
-        h('thead', null, h('tr', null, ...['Источник', 'Кандидат и контакты', 'Исходный рекрутер', 'Результат переноса', 'Действия'].map(label => h('th', { key: label, scope: 'col' }, label)))),
-        h('tbody', null, ...data.items.map(item => h('tr', { key: item.id, 'data-import-id': item.id },
-          h('td', null, h('strong', null, plain(item.sheet)), h('p', { className: 'recruitment-meta' }, `Строка ${plain(item.row)}`), item.location && h('p', { className: 'recruitment-meta' }, plain(item.location))),
-          h('td', null, h('strong', null, item.fullName || 'Имя не заполнено'), h('p', null, plain(item.phone)), h('p', { className: 'recruitment-meta' }, [item.city, item.source].filter(Boolean).map(plain).join(' · ') || 'Город и источник не заполнены')),
-          h('td', null, plain(item.recruiter)),
-          h('td', null, badge(statusName(item.status), item.status === 'review' ? 'is-warning' : ''), issues(item) && h('p', { className: 'recruitment-import-issues' }, issues(item))),
-          h('td', null, h('div', { className: 'recruitment-import-actions' }, button('Исходная строка', () => setSelectedId(item.id), { className: 'recruitment-text-button' }), item.candidateId && button('Открыть карточку', () => openCandidate(item.candidateId), { className: 'recruitment-text-button' }))))))))
-        : empty('Строк по выбранным условиям нет', data?.fileName ? 'Измените фильтры или поисковый запрос.' : 'В компании пока нет загруженной истории из Excel.'),
-      h('div', { className: 'recruitment-pagination' }, h('span', { className: 'recruitment-meta', role: 'status' }, data?.total ? `${(page - 1) * 50 + 1}–${Math.min(page * 50, data.total)} из ${data.total} · по 50 строк` : 'Нет строк'),
-        h('div', { className: 'recruitment-actions' }, button('Предыдущая страница Excel', () => setPage(current => Math.max(1, current - 1)), { disabled: loading || page <= 1 }), h('span', { className: 'recruitment-meta' }, `Страница ${page} из ${Math.max(1, Math.ceil((data?.total || 0) / 50))}`), button('Следующая страница Excel', () => setPage(current => current + 1), { disabled: loading || page * 50 >= (data?.total || 0) }))),
-      selectedId && h('div', { className: 'recruitment-overlay' }, h('section', { className: 'recruitment-dialog recruitment-import-dialog', role: 'dialog', 'aria-modal': true, 'aria-labelledby': 'recruitment-import-heading' },
-        h('div', { className: 'recruitment-dialog-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, 'ИСТОЧНИК ИЗ EXCEL'), h('h2', { id: 'recruitment-import-heading' }, detail ? `${detail.item.sheet} · строка ${detail.item.row}` : 'Исходная строка')), button('Закрыть исходную строку', () => setSelectedId(null), { className: 'recruitment-text-button' })),
-        h('div', { className: 'recruitment-detail-body' }, detailBusy ? h('p', { role: 'status' }, 'Загружаем исходные значения…') : detail && h(React.Fragment, null,
-          h('p', { className: 'recruitment-meta' }, `${plain(detail.fileName)} · ${statusName(detail.item.status)}`),
-          h('p', { className: 'recruitment-note' }, 'Это историческая строка исходного файла. Отметки найма и проверок не являются подтверждениями в приложении.'),
-          issues(detail.item) && h('p', { className: 'recruitment-import-issues' }, issues(detail.item)),
-          h('dl', { className: 'recruitment-import-fields' }, ...(detail.fields || []).map((sourceField, index) => h('div', { key: `${sourceField.column || ''}-${index}` }, h('dt', null, sourceField.label || sourceField.column || `Поле ${index + 1}`), h('dd', null, h('span', null, plain(sourceField.value ?? sourceField.cached)), sourceField.formula && h(React.Fragment, null, h('small', null, 'Сохранённое значение из файла; формула не пересчитывается.'), h('details', { className: 'recruitment-import-formula' }, h('summary', null, 'Формула в исходном файле'), h('code', null, plain(sourceField.formula)))))))),
-          detail.item.candidateId && button('Открыть карточку кандидата', () => openCandidate(detail.item.candidateId), { className: 'button recruitment-primary' }))))));
-  }
 
   function FormDialog({ form, setForm, saving, error, onSave, onClose, data, actor, accessData, scopes, onAssignAccess, onCopyInvitation }) {
     const ref = useRef(null);
@@ -271,9 +186,10 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       element?.addEventListener('keydown', keys);
       return () => { element?.removeEventListener('keydown', keys); previous?.focus?.(); };
     }, [onClose]);
-    const titles = { contacts: 'Результат контакта', security: 'Проверка СБ', start: 'Подтверждение выхода', candidates: 'Кандидат', requests: 'Потребность в подборе', applications: 'Подбор кандидата', tasks: 'Задача рекрутеру', access: 'Назначить потребности рекрутеру', account: 'Новый внешний рекрутер', attach: 'Подключить существующего рекрутера', invitation: value.invitationUrl ? 'Приглашение готово' : 'Пригласить по ссылке' };
+    const titles = { hh: 'Вакансия на hh', contacts: 'Результат контакта', security: 'Проверка СБ', start: 'Подтверждение выхода', candidates: 'Кандидат', requests: 'Потребность в подборе', applications: 'Подбор кандидата', tasks: 'Задача рекрутеру', access: 'Назначить потребности рекрутеру', account: 'Новый внешний рекрутер', attach: 'Подключить существующего рекрутера', invitation: value.invitationUrl ? 'Приглашение готово' : 'Пригласить по ссылке' };
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     let fields;
+    if (form.type === 'hh') fields = [h(HhPublicationFields, { value, change, saving })];
     if (form.type === 'candidates') fields = [
       field('ФИО', text('fullName', { required: true, maxLength: 160, autoComplete: 'name' }), null, true),
       field('Телефон', text('phone', { required: true, type: 'tel', maxLength: 30, autoComplete: 'tel', placeholder: '+7 900 000-00-00' })),
@@ -293,7 +209,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       field('Город', text('city', { required: value.status === 'open', maxLength: 100 })), field('Район / место работы', text('district', { maxLength: 160 })),
       field('Рекрутер', select('recruiterId', [['', 'Выберите рекрутера'], ...recruiters], { required: true })), field('Нужны к дате', text('neededBy', { type: 'date' })),
       h('label', { className: 'recruitment-check is-wide' }, h('input', { type: 'checkbox', checked: Boolean(value.requiresSecurity), disabled: Boolean(value.version) && !operator, onChange: (event) => change('requiresSecurity', event.target.checked) }), 'Согласование СБ обязательно перед стажировкой и выходом', Boolean(value.version) && !operator && h('small', null, 'Изменить это правило может руководитель, диспетчер или администратор.')),
-      field('Приоритет', select('priority', [['normal', 'Обычный'], ['urgent', 'Срочно']])), field('Статус потребности', select('status', [['open', 'Открыта'], ['paused', 'Приостановлена'], ['closed', 'Закрыта']])),
+      field('Приоритет', select('priority', [['normal', 'Обычный'], ['urgent', 'Срочно']])), field('Статус потребности', select('status', REQUEST_STATUSES)),
       field('График работы', text('schedule', { maxLength: 300 }), null, true), field('Условия оплаты', area('payTerms', 1000, 2), null, true),
       field('Адрес склада / точки выхода', text('warehouseAddress', { maxLength: 500 }), null, true),
       field('Маршруты и работа на проекте', area('routeInfo', 1000, 2), null, true),
@@ -382,25 +298,33 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     const companies = [...new Map(scopes.map(item => [item.legalEntityId, item])).values()];
     if (!external && form.type === 'candidates' && !value.version && companies.length > 1) fields.unshift(field('Компания', select('responsibilityScopeId', companies.map(item => [item.responsibilityScopeId, item.legalEntityName])), null, true));
     return h('div', { className: 'recruitment-overlay' }, h('section', { className: 'recruitment-dialog', ref, role: 'dialog', 'aria-modal': true, 'aria-labelledby': headingId },
-      h('div', { className: 'recruitment-dialog-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, value.version ? 'РЕДАКТИРОВАНИЕ' : 'НОВАЯ ЗАПИСЬ'), h('h2', { id: headingId }, titles[form.type])), button('Закрыть', onClose, { className: 'recruitment-text-button', disabled: saving })),
+      h('div', { className: 'recruitment-dialog-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, form.type === 'hh' ? 'РАЗМЕЩЕНИЕ ВАКАНСИИ' : value.version ? 'РЕДАКТИРОВАНИЕ' : 'НОВАЯ ЗАПИСЬ'), h('h2', { id: headingId }, titles[form.type])), button('Закрыть', onClose, { className: 'recruitment-text-button', disabled: saving })),
       h('form', { onSubmit: onSave },
         h('fieldset', { disabled: saving, className: 'recruitment-form-grid' }, ...fields.filter(Boolean).map((item, index) => React.cloneElement(item, { key: item.key || index }))),
         error && h('div', { className: 'recruitment-error', role: 'alert' }, error),
-        h('div', { className: 'recruitment-form-footer' }, h('small', null, value.invitationUrl ? 'Приглашение создано. Сохраните ссылку перед закрытием окна.' : 'Изменения сохраняются на сервере после нажатия кнопки.'),
-          button(value.issuedPassword || value.invitationUrl ? 'Закрыть' : 'Отмена', onClose, { disabled: saving }), !value.issuedPassword && !value.invitationUrl && h('button', { type: 'submit', className: 'button recruitment-primary', disabled: saving }, saving ? 'Сохраняем…' : form.type === 'invitation' ? 'Сгенерировать ссылку' : form.type === 'attach' ? 'Подключить аккаунт' : form.type === 'account' ? value.createdEmployeeId ? 'Выдать пароль' : 'Создать аккаунт' : 'Сохранить')))));
+        h('div', { className: 'recruitment-form-footer' }, h('small', null, form.type === 'hh' ? 'В потребности сохраняются ссылка и отметка публикации.' : value.invitationUrl ? 'Приглашение создано. Сохраните ссылку перед закрытием окна.' : 'Изменения сохраняются на сервере после нажатия кнопки.'),
+          button(value.issuedPassword || value.invitationUrl ? 'Закрыть' : 'Отмена', onClose, { disabled: saving }), !value.issuedPassword && !value.invitationUrl && h('button', { type: 'submit', className: 'button recruitment-primary', disabled: saving }, saving ? 'Сохраняем…' : form.type === 'hh' ? 'Сохранить ссылку' : form.type === 'invitation' ? 'Сгенерировать ссылку' : form.type === 'attach' ? 'Подключить аккаунт' : form.type === 'account' ? value.createdEmployeeId ? 'Выдать пароль' : 'Создать аккаунт' : 'Сохранить')))));
   }
 
-  return function RecruitmentPanel({ token, actor, onExpired, onDirtyChange, taskRequest = 0, reminderScopeId = null }) {
+  return function RecruitmentPanel({ token, actor, onExpired, onDirtyChange, taskRequest = 0, reminderScopeId = null, workspace = "recruitment", initialCandidate = null, onOpenOnboarding }) {
     const external = actor?.role === 'external_recruiter';
+    const onboardingOnly = workspace === 'onboarding' && !external && Boolean(OnboardingPanel);
     const company = ['manager', 'access_admin'].includes(actor?.role);
     const operator = ['manager', 'dispatcher', 'access_admin'].includes(actor?.role);
-    const canReadImport = ['manager', 'dispatcher', 'recruiter', 'access_admin'].includes(actor?.role);
-    const tabs = [...TABS, ...(!external && OnboardingPanel ? [['onboarding', 'Оформление']] : []), ...(canReadImport ? [['imports', 'Импорт Excel']] : []), ...(company ? COMPANY_TABS : [])];
+    const tabs = [...TABS, ...(company ? COMPANY_TABS : [])];
     const [scopes, setScopes] = useState([]), [scopeId, setScopeId] = useState('');
     const [data, setData] = useState(emptyData), [contextLoading, setContextLoading] = useState(true), [loading, setLoading] = useState(false);
     const requestedScope = useRef(new URLSearchParams(window.location.search).get('recruitmentScope')).current;
     const requestedTab = useRef(new URLSearchParams(window.location.search).get('recruitmentTab')).current;
-    const [tab, setTab] = useState(() => taskRequest > 0 ? 'tasks' : tabs.some(([id]) => id === requestedTab) ? requestedTab : 'candidates');
+    useEffect(() => {
+      if (onboardingOnly) return;
+      const url = new URL(window.location.href);
+      if (url.searchParams.get('recruitmentTab') === 'imports') {
+        url.searchParams.set('recruitmentTab', 'candidates');
+        window.history.replaceState(window.history.state, '', url);
+      }
+    }, [onboardingOnly]);
+    const [tab, setTab] = useState(() => onboardingOnly ? 'onboarding' : taskRequest > 0 ? 'tasks' : tabs.some(([id]) => id === requestedTab) ? requestedTab : 'candidates');
     const [candidateFilter, setCandidateFilter] = useState({ search: '', city: '', kind: '', recruiter: '', source: '', stage: '' });
     const [generalFilter, setGeneralFilter] = useState({ search: '', city: '', kind: '', recruiter: '' });
     const [workView, setWorkView] = useState('all'), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(25);
@@ -414,19 +338,21 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     const [showArchive, setShowArchive] = useState(false), [taskStatus, setTaskStatus] = useState('open');
     const [onlyWithCandidates, setOnlyWithCandidates] = useState(false);
     const [form, setForm] = useState(null), [detailId, setDetailId] = useState(null), [demandId, setDemandId] = useState(null), [saving, setSaving] = useState(false);
-    const [onboardingCandidateId, setOnboardingCandidateId] = useState(''), [onboardingDirty, setOnboardingDirty] = useState(false);
+    const onboardingCandidateId = initialCandidate?.id || '';
+    const [onboardingDirty, setOnboardingDirty] = useState(false);
     const [stageEdit, setStageEdit] = useState(null), [stageResult, setStageResult] = useState(null);
     const [stageConflicts, setStageConflicts] = useState([]);
+    const [requestStatusFeedback, setRequestStatusFeedback] = useState({}), [requestStatusEdit, setRequestStatusEdit] = useState(null);
     const [invitations, setInvitations] = useState([]);
     const [accessData, setAccessData] = useState({ users: [], grants: [] }), [activity, setActivity] = useState(null), [days, setDays] = useState(30), [companyLoading, setCompanyLoading] = useState(false);
     const [error, setError] = useState(''), [formError, setFormError] = useState(''), [message, setMessage] = useState('');
     const [refreshKey, setRefreshKey] = useState(0), [contextKey, setContextKey] = useState(0), [now, setNow] = useState(Date.now());
     const mounted = useRef(true), callbacks = useRef({ onExpired, onDirtyChange }), dirtyRef = useRef(false), scopeRef = useRef(scopeId), savingRef = useRef(false), accessVersionRef = useRef(null);
-    const snapshotEpoch = useRef(0);
+    const snapshotEpoch = useRef(0), detailEpoch = useRef(0);
     callbacks.current = { onExpired, onDirtyChange };
     scopeRef.current = scopeId;
     savingRef.current = saving;
-    const dirty = Boolean(onboardingDirty || stageEdit || (form && JSON.stringify(form.value) !== form.initial));
+    const dirty = Boolean(onboardingDirty || stageEdit || requestStatusEdit || (form && JSON.stringify(form.value) !== form.initial));
     dirtyRef.current = dirty;
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const listScopeId = '';
@@ -438,6 +364,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       return value.responsibilityScopeId;
     };
     const recruiterName = (id) => data.recruiters.find((item) => item.id === id)?.name || 'Рекрутер недоступен';
+    const hhAction = item => !external && (item.status === 'open' || item.hhUrl) && button(item.hhUrl ? 'Вакансия на hh' : 'Разместить на hh', () => openForm('hh', item), { className: 'button recruitment-hh-button', disabled: saving });
     const candidateMap = useMemo(() => new Map(data.candidates.map((item) => [item.id, item])), [data.candidates]);
     const requestMap = useMemo(() => new Map(data.requests.map((item) => [item.id, item])), [data.requests]);
     const applicationsByCandidate = useMemo(() => {
@@ -459,8 +386,23 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     }, [data.applications, candidateMap]);
     const detail = candidateMap.get(detailId);
     const demandDetail = requestMap.get(demandId);
+    const { boardRef, cardProps, dragState } = useRecruitmentBoardDrag({
+      enabled: paginated && candidateLayout === 'board' && !loading && !saving && !stageEdit && !detailId && !demandId && !form,
+      onDrop: ({ applicationId, fromStage, toStage }) => {
+        const application = data.applications.find(item => item.id === applicationId);
+        if (application && application.stage === fromStage && STAGES.some(([id]) => id === toStage)) chooseStage(application, toStage);
+      },
+    });
+    useEffect(() => {
+      if (candidateLayout !== 'board' || detailId || demandId) return;
+      const applicationId = stageEdit?.id || (stageResult?.error || stageResult?.message ? stageResult.id : null);
+      if (!applicationId) return;
+      const card = [...(boardRef.current?.querySelectorAll('[data-application-id]') || [])].find(item => item.dataset.applicationId === applicationId);
+      card?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    }, [candidateLayout, detailId, demandId, stageEdit?.id, stageResult?.id, stageResult?.error, stageResult?.message]);
     const confirmDiscard = () => !dirtyRef.current || window.confirm('В рекрутинге есть несохранённые изменения. Выйти без сохранения?');
-    const clearForm = () => { setForm(null); setFormError(''); setStageEdit(null); setStageResult(null); dirtyRef.current = false; callbacks.current.onDirtyChange?.(false); };
+    const clearForm = () => { setForm(null); setFormError(''); setStageEdit(null); setStageResult(null); setRequestStatusEdit(null); dirtyRef.current = false; callbacks.current.onDirtyChange?.(false); };
+    const closeDetail = () => { if (!savingRef.current && confirmDiscard()) { clearForm(); setDetailId(null); setDemandId(null); } };
     const closeFormRef = useRef(null);
     closeFormRef.current = () => { if (!savingRef.current && confirmDiscard()) clearForm(); };
     const stableClose = useMemo(() => () => closeFormRef.current?.(), []);
@@ -469,6 +411,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       if (reason?.name === 'AbortError') return;
       if ([401, 403].includes(reason?.status)) {
         snapshotEpoch.current += 1;
+        detailEpoch.current += 1; setLoading(false); setDetailLoading(false);
         setData(emptyData()); setWorklist({ items: [], total: 0, counts: {}, cities: [] }); setAccessData({ users: [], grants: [] }); setInvitations([]); setActivity(null); setDetailId(null); setDemandId(null); clearForm();
         if (external) { setScopes([]); setScopeId(''); }
         if (reason.status === 401) callbacks.current.onExpired?.();
@@ -491,7 +434,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       const previous = document.activeElement;
       element.querySelector('button')?.focus();
       const keys = (event) => {
-        if (event.key === 'Escape') { event.preventDefault(); setDetailId(null); setDemandId(null); }
+        if (event.key === 'Escape') { event.preventDefault(); closeDetail(); }
         if (event.key === 'Tab') {
           const nodes = [...element.querySelectorAll('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), textarea:not([disabled])')].filter((node) => node.offsetParent !== null);
           if (event.shiftKey && document.activeElement === nodes[0]) { event.preventDefault(); nodes[nodes.length - 1]?.focus(); }
@@ -519,7 +462,9 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     useEffect(() => {
       const controller = new AbortController(); let active = true;
       snapshotEpoch.current += 1;
+      detailEpoch.current += 1; setLoading(false); setDetailLoading(false);
       clearForm();
+      setRequestStatusFeedback({});
       setContextLoading(true); setError(''); setData(emptyData()); setWorklist({ items: [], total: 0, counts: {}, cities: [] }); setAccessData({ users: [], grants: [] }); setInvitations([]); setActivity(null); setDetailId(null); setDemandId(null); setScopes([]); setScopeId('');
       request('/recruitment/context', { signal: controller.signal }, token).then((result) => {
         if (!active) return;
@@ -533,35 +478,42 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       setData(current => {
         const next = paginated ? pageData(result) : { ...emptyData(), ...result };
         if (!detailId) return next;
-        return { ...next, candidates: mergeById(next.candidates, current.candidates.filter(item => item.id === detailId)), applications: mergeById(next.applications, current.applications.filter(item => item.candidateId === detailId)), tasks: mergeById(next.tasks, current.tasks.filter(item => item.candidateId === detailId)), contacts: current.contacts, events: mergeById(next.events, current.events), workflowEvents: current.workflowEvents };
+        return { ...next, candidates: mergeById(next.candidates, current.candidates.filter(item => item.id === detailId)), applications: mergeById(current.applications.filter(item => item.candidateId === detailId), next.applications), tasks: mergeById(next.tasks, current.tasks.filter(item => item.candidateId === detailId)), contacts: current.contacts, events: mergeById(next.events, current.events), workflowEvents: current.workflowEvents };
       });
       if (paginated) {
         setWorklist(result);
         setPage(current => Math.min(current, Math.max(1, Math.ceil((result.total || 0) / pageSize))));
       }
       setStageConflicts([]);
+      setRequestStatusFeedback({});
     };
+    function receiveCandidate(result) {
+      setContactTotal(result.contactTotal || 0);
+      setData(current => ({ ...current, candidates: mergeById(current.candidates, [result.candidate]), applications: mergeById(current.applications, result.applications), tasks: mergeById(current.tasks, result.tasks), events: mergeById(current.events, result.events), requests: mergeById(current.requests, result.requests), requestRecruiters: result.requestRecruiters || current.requestRecruiters, recruiters: mergeById(current.recruiters, result.recruiters), contacts: result.contacts || [], workflowEvents: result.workflowEvents || [], workflowOperators: result.workflowOperators || current.workflowOperators }));
+    }
+    const candidatePath = id => `/recruitment/candidate?${scopeQuery(external ? candidateMap.get(id)?.responsibilityScopeId : '', { candidateId: id, contactPage: String(contactPage), contactPageSize: '50' })}`;
+    const stageSnapshots = () => Promise.all([request(snapshotPath, {}, token), detailId ? request(candidatePath(detailId), {}, token) : null]);
+    const receiveStageSnapshots = ([snapshot, card]) => { receiveSnapshot(snapshot); if (card) receiveCandidate(card); };
     useEffect(() => { setPage(1); }, [scopeId, workView, candidateFilter.search, candidateFilter.city, candidateFilter.kind, candidateFilter.recruiter, candidateFilter.source, candidateFilter.stage, showArchive, pageSize]);
     useEffect(() => {
       if (!scopeId) return;
-      if (['imports', 'onboarding'].includes(tab)) { setLoading(false); return; }
+      if (tab === 'onboarding') { setLoading(false); return; }
       const controller = new AbortController(); let active = true;
-      snapshotEpoch.current += 1;
+      const epoch = ++snapshotEpoch.current;
       setLoading(true); setError('');
       const timer = setTimeout(() => request(snapshotPath, { signal: controller.signal }, token).then((result) => {
-        if (active) receiveSnapshot(result);
-      }).catch((reason) => { if (active) fail(reason); }).finally(() => { if (active) setLoading(false); }), paginated && filter.search ? 200 : 0);
+        if (active && snapshotEpoch.current === epoch) receiveSnapshot(result);
+      }).catch((reason) => { if (active && snapshotEpoch.current === epoch) fail(reason); }).finally(() => { if (active && snapshotEpoch.current === epoch) setLoading(false); }), paginated && filter.search ? 200 : 0);
       return () => { active = false; clearTimeout(timer); controller.abort(); };
-    }, [token, scopeId, refreshKey, snapshotPath, tab === 'imports', tab === 'onboarding']);
+    }, [token, scopeId, refreshKey, snapshotPath, tab === 'onboarding']);
     useEffect(() => {
       if (!detailId || !scopeId) return;
       const controller = new AbortController(); let active = true;
+      const epoch = ++detailEpoch.current;
       setDetailLoading(true);
-      request(`/recruitment/candidate?${scopeQuery(external ? candidateMap.get(detailId)?.responsibilityScopeId : '', { candidateId: detailId, contactPage: String(contactPage), contactPageSize: '50' })}`, { signal: controller.signal }, token).then(result => {
-        if (!active) return;
-        setContactTotal(result.contactTotal || 0);
-        setData(current => ({ ...current, candidates: mergeById(current.candidates, [result.candidate]), applications: mergeById(current.applications, result.applications), tasks: mergeById(current.tasks, result.tasks), events: mergeById(current.events, result.events), requests: mergeById(current.requests, result.requests), requestRecruiters: result.requestRecruiters || current.requestRecruiters, recruiters: mergeById(current.recruiters, result.recruiters), contacts: result.contacts || [], workflowEvents: result.workflowEvents || [], workflowOperators: result.workflowOperators || current.workflowOperators }));
-      }).catch(reason => { if (active) fail(reason); }).finally(() => { if (active) setDetailLoading(false); });
+      request(candidatePath(detailId), { signal: controller.signal }, token).then(result => {
+        if (active && detailEpoch.current === epoch) receiveCandidate(result);
+      }).catch(reason => { if (active && detailEpoch.current === epoch) fail(reason); }).finally(() => { if (active && detailEpoch.current === epoch) setDetailLoading(false); });
       return () => { active = false; controller.abort(); };
     }, [token, scopeId, detailId, refreshKey, contactPage]);
     useEffect(() => { setContactPage(1); }, [detailId]);
@@ -624,7 +576,8 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     function navigate(next) { if (saving || !confirmDiscard()) return; clearForm(); setOnboardingDirty(false); setDetailId(null); setDemandId(null); setTab(next); setMessage(''); }
     async function openForm(type, record, extra = {}) {
       if (saving || !confirmDiscard()) return;
-      if (external && ['requests', 'access', 'account', 'invitation'].includes(type)) return;
+      if (external && ['requests', 'hh', 'access', 'account', 'invitation'].includes(type)) return;
+      if (type === 'hh' && (!record?.version || (!record.hhUrl && record.status !== 'open'))) return;
       if (['access', 'account'].includes(type) && !company) return;
       if (type === 'invitation' && actor?.role !== 'access_admin') return;
       let catalog = data, accessCatalog = accessData;
@@ -680,18 +633,20 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       if (external && type === 'tasks') value.assigneeId = actor.id;
       if (type === 'access') { value.status = 'active'; value.expiresAtLocal = localDateTime(value.expiresAt); }
       if (type === 'requests') value.publishedAtLocal = localDateTime(value.publishedAt);
+      if (type === 'hh') Object.assign(value, hhVacancyDraft(value));
       if (type === 'tasks') value.dueAtLocal = localDateTime(value.dueAt);
-      setStageEdit(null); setStageResult(null); setDemandId(null); setForm({ type, value, initial: JSON.stringify(value), catalog, accessCatalog }); setFormError(''); setMessage('');
+      setStageEdit(null); setStageResult(null); setRequestStatusEdit(null); setDemandId(null); setForm({ type, value, initial: JSON.stringify(value), catalog, accessCatalog }); setFormError(''); setMessage('');
     }
     async function refreshStages(applicationId) {
-      if (savingRef.current || (stageEdit && stageEdit.id !== applicationId && !confirmDiscard())) return;
+      if (savingRef.current || loading || (stageEdit && stageEdit.id !== applicationId && !confirmDiscard())) return;
       const submittedScope = scopeId;
-      const epoch = snapshotEpoch.current;
+      const epoch = ++snapshotEpoch.current;
+      detailEpoch.current += 1; setDetailLoading(false);
       savingRef.current = true; setSaving(true);
       try {
-        const result = await request(snapshotPath, {}, token);
+        const result = await stageSnapshots();
         if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
-        receiveSnapshot(result); setStageEdit(null); setStageResult(null);
+        receiveStageSnapshots(result); setStageEdit(null); setStageResult(null);
       } catch (reason) {
         if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
         if ([401, 403].includes(reason?.status)) fail(reason);
@@ -699,9 +654,10 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       } finally { if (mounted.current) { savingRef.current = false; setSaving(false); } }
     }
     async function saveStage(application, changes) {
-      if (savingRef.current || stageConflicts.includes(application.id) || application.stage === changes.stage) return;
+      if (savingRef.current || loading || stageConflicts.includes(application.id) || application.stage === changes.stage) return;
       const submittedScope = scopeId;
-      const epoch = snapshotEpoch.current;
+      const epoch = ++snapshotEpoch.current;
+      detailEpoch.current += 1; setDetailLoading(false);
       savingRef.current = true; setSaving(true); setMessage('');
       setStageResult({ id: application.id, pending: true });
       try {
@@ -713,8 +669,8 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         window.dispatchEvent(new Event('recruitment:changed'));
         // Refresh server history and counts without clearing the grid or losing focus/scroll.
         try {
-          const result = await request(snapshotPath, {}, token);
-          if (mounted.current && scopeRef.current === submittedScope && snapshotEpoch.current === epoch) { receiveSnapshot(result); }
+          const result = await stageSnapshots();
+          if (mounted.current && scopeRef.current === submittedScope && snapshotEpoch.current === epoch) { receiveStageSnapshots(result); }
         } catch (reason) {
           if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
           if ([401, 403].includes(reason?.status)) fail(reason);
@@ -731,18 +687,102 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       } finally { if (mounted.current) { savingRef.current = false; setSaving(false); } }
     }
     function chooseStage(application, stage) {
-      if (savingRef.current || stageConflicts.includes(application.id) || (stageEdit && stageEdit.id !== application.id && !confirmDiscard())) return;
+      if (savingRef.current || loading || stageConflicts.includes(application.id) || ((requestStatusEdit || (stageEdit && stageEdit.id !== application.id)) && !confirmDiscard())) return;
+      setRequestStatusEdit(null);
       setStageEdit(null); setStageResult(null);
       if (stage === application.stage) return;
       if (stage === 'rejected' || stage === 'hired') {
         setStageEdit({ id: application.id, stage, reason: '', startDate: application.startDate || '' });
       } else saveStage(application, { stage });
     }
+    async function saveRequestStatus(item, status, fields = {}) {
+      if (external || savingRef.current || loading || requestStatusFeedback[item.id]?.conflict || !REQUEST_STATUSES.some(([id]) => id === status)) return;
+      if (item.status === status) return;
+      const submittedScope = scopeId, epoch = ++snapshotEpoch.current;
+      const submitted = { ...item, ...fields, status };
+      delete submitted.sourceDetails;
+      savingRef.current = true; setSaving(true);
+      setRequestStatusFeedback(current => ({ ...current, [item.id]: { pending: true } }));
+      try {
+        const saved = await request('/recruitment/requests', { method: 'PUT', body: JSON.stringify(submitted) }, token);
+        if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
+        // Use the confirmed record in place: keep filters, scroll and card focus.
+        setData(current => ({ ...current, requests: mergeById(current.requests, [saved]) }));
+        setRequestStatusEdit(null);
+        setRequestStatusFeedback(current => ({ ...current, [item.id]: { message: 'Статус сохранён' } }));
+        window.dispatchEvent(new Event('recruitment:changed'));
+      } catch (reason) {
+        if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
+        if ([401, 403].includes(reason?.status)) fail(reason);
+        else setRequestStatusFeedback(current => ({ ...current, [item.id]: {
+          conflict: reason?.status === 409,
+          error: reason?.status === 409 ? 'Потребность уже изменена другим пользователем. Обновите её и выберите статус заново.'
+            : reason?.status === 400 ? reason.message || 'Проверьте город и количество потребности.'
+              : 'Не удалось подтвердить сохранение статуса. Проверьте соединение и повторите попытку.',
+        } }));
+      } finally { if (mounted.current) { savingRef.current = false; setSaving(false); } }
+    }
+    function chooseRequestStatus(item, status) {
+      if (external || savingRef.current || loading || requestStatusFeedback[item.id]?.conflict || !confirmDiscard()) return;
+      clearForm();
+      setRequestStatusFeedback(current => ({ ...current, [item.id]: {} }));
+      if (item.status === status) return;
+      if (status === 'open' && (!item.city?.trim() || !Number.isSafeInteger(item.quantity) || item.quantity < 1)) {
+        setRequestStatusEdit({ id: item.id, city: item.city || '', quantity: item.quantity > 0 ? String(item.quantity) : '' });
+        return;
+      }
+      saveRequestStatus(item, status);
+    }
+    async function refreshRequestStatus(item) {
+      if (external || savingRef.current || loading || !confirmDiscard()) return;
+      clearForm();
+      const submittedScope = scopeId, epoch = ++snapshotEpoch.current;
+      savingRef.current = true; setSaving(true);
+      setRequestStatusFeedback(current => ({ ...current, [item.id]: { ...current[item.id], pending: 'refresh' } }));
+      try {
+        const result = await request(snapshotPath, {}, token);
+        if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
+        receiveSnapshot(result);
+        setRequestStatusFeedback(current => ({ ...current, [item.id]: { message: 'Данные обновлены. Выберите статус.' } }));
+      } catch (reason) {
+        if (!mounted.current || scopeRef.current !== submittedScope || snapshotEpoch.current !== epoch) return;
+        if ([401, 403].includes(reason?.status)) fail(reason);
+        else setRequestStatusFeedback(current => ({ ...current, [item.id]: { conflict: true, error: 'Не удалось обновить потребность. Проверьте соединение и повторите попытку.' } }));
+      } finally { if (mounted.current) { savingRef.current = false; setSaving(false); } }
+    }
+    function requestStatusControl(item) {
+      const result = requestStatusFeedback[item.id], edit = requestStatusEdit?.id === item.id ? requestStatusEdit : null;
+      const feedbackId = `recruitment-request-status-${item.id}`;
+      return h('div', { className: 'recruitment-request-status', 'aria-busy': Boolean(result?.pending) },
+        field('Статус потребности', h('select', { value: item.status, disabled: saving || loading || Boolean(result?.conflict), 'aria-describedby': feedbackId, onChange: event => chooseRequestStatus(item, event.target.value) },
+          ...REQUEST_STATUSES.map(([id, label]) => h('option', { key: id, value: id }, label)))),
+        h('p', { id: feedbackId, className: result?.error ? 'recruitment-error' : 'recruitment-request-status-feedback', role: result?.error ? 'alert' : 'status' }, result?.pending ? result.pending === 'refresh' ? 'Обновляем…' : 'Сохраняем…' : result?.error || result?.message || 'Сохраняется сразу после выбора'),
+        result?.conflict && button('Обновить потребность', () => refreshRequestStatus(item), { className: 'recruitment-text-button', disabled: saving }),
+        edit && h('form', { className: 'recruitment-request-status-form', onSubmit: event => {
+          event.preventDefault();
+          if (savingRef.current || result?.conflict) return;
+          saveRequestStatus(item, 'open', { city: edit.city.trim(), quantity: Number(edit.quantity) });
+        } },
+        h('p', { className: 'recruitment-meta' }, 'Чтобы открыть потребность, укажите город и количество.'),
+        field('Город для открытия потребности', h('input', { value: edit.city, required: true, maxLength: 100, disabled: saving || Boolean(result?.conflict), onChange: event => setRequestStatusEdit(current => ({ ...current, city: event.target.value })) })),
+        field('Количество для открытия потребности', h('input', { type: 'number', value: edit.quantity, required: true, min: 1, max: 10000, step: 1, disabled: saving || Boolean(result?.conflict), onChange: event => setRequestStatusEdit(current => ({ ...current, quantity: event.target.value })) }), item.kind === 'carrier' ? 'Сколько машин требуется' : 'Сколько водителей требуется'),
+        h('div', { className: 'recruitment-actions' }, h('button', { type: 'submit', className: 'button recruitment-primary', disabled: saving || Boolean(result?.conflict) }, 'Открыть потребность'), button('Отмена', () => { setRequestStatusEdit(null); setRequestStatusFeedback(current => ({ ...current, [item.id]: result?.conflict ? result : {} })); }, { disabled: saving }))));
+    }
     async function save(event) {
       event.preventDefault();
-      if (saving || !form) return;
+      if (savingRef.current || !form) return;
       const submitted = { ...form.value, responsibilityScopeId: recordScope(form.value, form.type, form.catalog || data) || scopeId };
       delete submitted.targetRequestId;
+      if (form.type === 'hh') {
+        if (external) return;
+        const url = hhVacancyUrl(submitted.hhUrl);
+        if (!url) { setFormError('Укажите ссылку на опубликованную вакансию вида https://hh.ru/vacancy/123456789.'); return; }
+        submitted.hhUrl = url;
+        submitted.publishedAt ||= new Date().toISOString();
+        delete submitted.hhTitle;
+        delete submitted.hhText;
+        delete submitted.sourceDetails;
+      }
       if (form.type === 'access') {
         if (!submitted.userId || !submitted.requestIds.length) { setFormError('Выберите рекрутера и хотя бы одну потребность.'); return; }
         if (!submitted.expiresAtLocal || new Date(submitted.expiresAtLocal) <= new Date()) { setFormError('Укажите будущую дату окончания доступа.'); return; }
@@ -771,7 +811,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         if ((submitted.hasNextAction || ['no_answer', 'callback', 'thinking'].includes(submitted.result)) && (!submitted.nextTitle?.trim() || !submitted.nextDueAtLocal || !submitted.nextAssigneeId)) { setFormError('Укажите следующее действие, срок и ответственного.'); return; }
       }
       const type = form.type, submittedScope = scopeId, submitTarget = submitted.responsibilityScopeId;
-      setSaving(true); setFormError('');
+      savingRef.current = true; setSaving(true); setFormError('');
       try {
         if (['contacts', 'security', 'start'].includes(type)) {
           const payload = type === 'contacts' ? {
@@ -815,14 +855,15 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
           setForm({ type, value, initial: JSON.stringify(value) }); setRefreshKey((current) => current + 1);
           return;
         }
-        const saved = await request(`/recruitment/${type}`, { method: 'PUT', body: JSON.stringify(submitted) }, token);
+        const saved = await request(`/recruitment/${type === 'hh' ? 'requests' : type}`, { method: 'PUT', body: JSON.stringify(submitted) }, token);
         if (!mounted.current || scopeRef.current !== submittedScope) return;
-        clearForm(); setMessage('Сохранено');
+        clearForm(); setMessage(type === 'hh' ? 'Ссылка на вакансию hh сохранена' : 'Сохранено');
+        if (type === 'hh') setData(current => ({ ...current, requests: mergeById(current.requests, [saved]) }));
         if (type === 'candidates') { setData(current => ({ ...current, candidates: mergeById(current.candidates, [saved]) })); setDetailId(saved.id); }
         setRefreshKey((value) => value + 1);
         window.dispatchEvent(new Event('recruitment:changed'));
       } catch (reason) { if (mounted.current && scopeRef.current === submittedScope) fail(reason, true); }
-      finally { if (mounted.current) setSaving(false); }
+      finally { savingRef.current = false; if (mounted.current) setSaving(false); }
     }
     async function copyInvitation() {
       const url = form?.value?.invitationUrl;
@@ -939,16 +980,17 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
           task.notes && h('p', { className: 'recruitment-note' }, task.notes)),
         h('div', { className: 'recruitment-actions' }, task.workflowKind === 'security' ? button('Открыть СБ', () => openSecurityTask(task), { disabled: saving || !data.applications.some(item => item.id === task.applicationId) }) : h(React.Fragment, null, button('Изменить задачу', () => openForm('tasks', task), { className: 'recruitment-text-button', disabled: saving }), button(task.status === 'done' ? 'Открыть снова' : 'Выполнить', () => finishTask(task), { disabled: saving }))));
     }
-    function quickStage(application) {
+    function quickStage(application, { inDetail = false, showTitle = true } = {}) {
       const demand = requestMap.get(application.requestId);
       const title = demand?.title || 'Потребность недоступна';
-      const edit = stageEdit?.id === application.id ? stageEdit : null;
+      const activeInline = inDetail ? !detailLoading : !detailId && !demandId;
+      const edit = activeInline && stageEdit?.id === application.id ? stageEdit : null;
       const result = stageResult?.id === application.id ? stageResult : stageConflicts.includes(application.id) ? { conflict: true, error: 'Подбор уже изменён другим пользователем. Обновите данные и выберите статус заново.' } : null;
       const cancel = () => { setStageEdit(null); if (!result?.conflict) setStageResult(null); };
       return h('div', { className: 'recruitment-quick-stage', key: application.id, 'aria-busy': Boolean(result?.pending) },
-        h('strong', { className: 'recruitment-quick-stage-title' }, title),
+        showTitle && h('strong', { className: 'recruitment-quick-stage-title' }, title),
         field('Статус подбора', h('select', { value: edit?.stage || application.stage, 'aria-label': `Статус подбора · ${title}`,
-          disabled: saving || !demand || result?.conflict, onChange: (event) => chooseStage(application, event.target.value) },
+          disabled: saving || loading || !activeInline || !demand || result?.conflict, onChange: (event) => chooseStage(application, event.target.value) },
         ...STAGES.map(([id, label]) => h('option', { key: id, value: id }, label)))),
         edit && h('form', { className: 'recruitment-quick-stage-form', onSubmit: (event) => {
           event.preventDefault();
@@ -965,7 +1007,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
           button('Отмена', cancel, { className: 'recruitment-text-button', disabled: saving }))),
         h('p', { className: `recruitment-stage-status${result?.message ? ' is-saved' : ''}`, role: 'status' }, result?.pending ? 'Сохраняем…' : result?.message || '\u00a0'),
         result?.error && h('p', { className: 'recruitment-error', role: 'alert' }, result.error),
-        (result?.conflict || result?.refresh) && button('Обновить данные', () => refreshStages(application.id), { className: 'recruitment-text-button', disabled: saving }));
+        (result?.conflict || result?.refresh) && button('Обновить данные', () => refreshStages(application.id), { className: 'recruitment-text-button', disabled: saving || loading || !activeInline }));
     }
     function candidateCard(candidate, linked = applicationsByCandidate.get(candidate.id) || []) {
       const openCandidate = () => { if (!savingRef.current && confirmDiscard()) { clearForm(); setDetailId(candidate.id); } };
@@ -981,23 +1023,25 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     }
     function boardCard(application) {
       const candidate = candidateMap.get(application.candidateId), demand = requestMap.get(application.requestId);
-      return h('article', { className: 'recruitment-pipeline-card', key: application.id, 'data-candidate-id': application.candidateId, 'data-application-id': application.id },
+      return h('article', { ...(demand && !stageConflicts.includes(application.id) ? cardProps(application.id) : {}), className: `recruitment-pipeline-card${dragState?.applicationId === application.id ? ' is-dragging' : ''}`, key: application.id, 'data-candidate-id': application.candidateId, 'data-application-id': application.id, 'data-drag-disabled': !demand || stageConflicts.includes(application.id) ? 'true' : undefined },
+        h('span', { className: 'recruitment-drag-handle', 'data-drag-handle': true, 'aria-hidden': true }, '⠿ Перетащить'),
         button(candidate?.fullName || 'Кандидат', () => { if (!savingRef.current && confirmDiscard()) { clearForm(); setDetailId(application.candidateId); } }, { className: 'recruitment-name-button', disabled: saving }),
         h('p', { className: 'recruitment-meta' }, `${candidate?.city || ''} · ${kindName(candidate?.kind)}`), h('p', { className: 'recruitment-demand-name' }, demand?.title || 'Потребность недоступна'),
         h('span', { className: 'recruitment-meta' }, recruiterName(application.recruiterId)),
         candidate?.archived && badge('Архив'),
-        h('div', { className: 'recruitment-card-bottom' }, button('Изменить этап', () => openForm('applications', application), { className: 'recruitment-text-button', disabled: saving }), hhLink(candidate?.hhUrl, 'hh ↗')));
+        quickStage(application, { showTitle: false }),
+        candidate?.hhUrl && h('div', { className: 'recruitment-card-bottom' }, hhLink(candidate.hhUrl, 'hh ↗')));
     }
     function demandCandidate(application, compact = false) {
       const candidate = candidateMap.get(application.candidateId);
-      const openCandidate = () => { setDemandId(null); setDetailId(candidate.id); };
+      const openCandidate = () => { if (!savingRef.current && confirmDiscard()) { clearForm(); setDemandId(null); setDetailId(candidate.id); } };
       return h('div', { className: `recruitment-demand-candidate${compact ? ' is-compact' : ''}`, key: application.id },
         h('div', { className: 'recruitment-demand-candidate-main' },
-          compact ? button(candidate.fullName, openCandidate, { className: 'recruitment-name-button' }) : h('strong', null, candidate.fullName),
+          compact ? button(candidate.fullName, openCandidate, { className: 'recruitment-name-button', disabled: saving }) : h('strong', null, candidate.fullName),
           !compact && h('p', { className: 'recruitment-meta' }, [candidate.city, !external && `Рекрутер: ${recruiterName(application.recruiterId)}`, application.startDate && `Выход: ${dateLabel(application.startDate)}`].filter(Boolean).join(' · ')),
           !compact && application.reason && h('p', { className: 'recruitment-note' }, application.reason)),
         h('div', { className: 'recruitment-actions' }, badge(stageName(application.stage), application.stage === 'hired' ? 'is-active' : ''), candidate.archived && badge('Архив')),
-        !compact && h('div', { className: 'recruitment-actions recruitment-demand-candidate-actions' }, button('Открыть кандидата', openCandidate, { className: 'recruitment-text-button' }), button('Изменить этап', () => openForm('applications', application), { className: 'recruitment-text-button' })));
+        !compact && h('div', { className: 'recruitment-actions recruitment-demand-candidate-actions' }, button('Открыть кандидата', openCandidate, { className: 'recruitment-text-button', disabled: saving }), button('Изменить этап', () => openForm('applications', application), { className: 'recruitment-text-button', disabled: saving })));
     }
 
     function workflowActions(candidate, application, nextTask) {
@@ -1030,26 +1074,28 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
     const pageItems = worklist.items || [];
     const pageApplications = pageItems.flatMap(item => item.applications || []);
     const withoutApplications = pageItems.filter(item => !item.applications?.length);
-    const candidateBoard = () => h('div', { className: 'recruitment-board', 'aria-label': 'Кандидаты по этапам', tabIndex: 0 },
+    const candidateBoard = () => h('div', { ref: boardRef, className: 'recruitment-board recruitment-board-dnd', 'aria-label': 'Кандидаты по этапам', 'aria-describedby': 'recruitment-board-hint', tabIndex: 0 },
       withoutApplications.length > 0 && h('section', { className: 'recruitment-column stage-unassigned' },
         h('div', { className: 'recruitment-column-title' }, h('h3', null, 'Без подбора'), h('span', null, withoutApplications.length)),
         ...withoutApplications.map(item => candidateCard(item.candidate, []))),
-      ...STAGES.filter(([id]) => pageApplications.some(item => item.stage === id)).map(([id, name]) => {
+      ...STAGES.map(([id, name]) => {
         const entries = pageApplications.filter(item => item.stage === id);
-        return h('section', { className: `recruitment-column stage-${id}`, key: id },
+        return h('section', { className: `recruitment-column stage-${id}${dragState?.toStage === id ? ' is-drop-target' : ''}`, key: id, 'data-stage': id },
           h('div', { className: 'recruitment-column-title' }, h('h3', null, name), h('span', null, entries.length)),
-          ...entries.map(boardCard));
+          ...entries.map(boardCard), !entries.length && h('p', { className: 'recruitment-column-empty' }, 'Перетащите карточку сюда'));
       }));
 
     let content;
-    if (tab === 'onboarding' && !external && OnboardingPanel) content = h(OnboardingPanel, { key: `onboarding-${refreshKey}`, token, scopes, defaultScopeId: scopeId, candidates: data.candidates, initialCandidateId: onboardingCandidateId, onExpired, refreshKey, onDirtyChange: setOnboardingDirty });
-    if (tab === 'imports' && canReadImport) content = h(ImportRowsPanel, { token, responsibilityScopeId: listScopeId, refreshKey, onError: fail, onCandidate: candidateId => { setDetailId(candidateId); setContactPage(1); } });
+    if (tab === 'onboarding' && !external && OnboardingPanel) content = h(OnboardingPanel, { key: `onboarding-${refreshKey}`, token, scopes, defaultScopeId: scopeId, candidates: initialCandidate ? [initialCandidate, ...data.candidates.filter(item => item.id !== initialCandidate.id)] : data.candidates, initialCandidateId: onboardingCandidateId, onExpired, refreshKey, onDirtyChange: setOnboardingDirty });
     if (paginated) content = h('div', { className: 'recruitment-work-view' },
       h('div', { className: 'recruitment-work-toolbar' },
         h('div', { className: 'recruitment-segment', 'aria-label': 'Вид кандидатов' }, ...[['table', 'Список'], ['board', 'По этапам']].map(([id, label]) => button(label, () => setCandidateLayout(id), { key: id, 'aria-pressed': candidateLayout === id, disabled: saving || Boolean(stageEdit) }))),
         h('p', { className: 'recruitment-meta' }, candidateLayout === 'table' ? 'Один кандидат — одна строка. После контакта фиксируйте результат и следующий шаг.' : 'Один кандидат может иметь несколько подборов. Фильтры выбирают людей; в колонках показаны все их подборы.')),
       h('div', { className: 'recruitment-work-views', 'aria-label': 'Очереди работы' }, ...WORK_VIEWS.map(([id, label]) => button(h(React.Fragment, null, h('span', null, label), h('strong', null, worklist.counts?.[id] ?? '—')), () => { if (confirmDiscard()) { clearForm(); setWorkView(id); } }, { key: id, 'aria-pressed': workView === id, disabled: saving }))),
-      h('p', { className: 'recruitment-meta' }, candidateLayout === 'board' ? `На странице: ${pageItems.length} кандидатов · ${pageApplications.length} подборов · без подбора: ${withoutApplications.length}. Числа в колонках относятся к этой странице, в очередях — ко всей выборке. Пустые этапы скрыты.` : `Числа в очередях — кандидаты по выбранным фильтрам. «На сегодня»: ${worklist.timeZone || zone}. Время действий: ${zone}.`),
+      h('p', { className: 'recruitment-meta' }, candidateLayout === 'board' ? `На странице: ${pageItems.length} кандидатов · ${pageApplications.length} подборов · без подбора: ${withoutApplications.length}. Числа в колонках относятся к этой странице, в очередях — ко всей выборке. Этап можно выбрать в карточке или изменить перетаскиванием.` : `Числа в очередях — кандидаты по выбранным фильтрам. «На сегодня»: ${worklist.timeZone || zone}. Время действий: ${zone}.`),
+      candidateLayout === 'board' && h('p', { className: 'recruitment-board-hint', id: 'recruitment-board-hint' }, 'Перетащите карточку мышью за свободную область или «⠿ Перетащить». На телефоне удерживайте её, затем ведите к нужному этапу. У края доска прокручивается. Отмена — отпустить за пределами доски или нажать Esc.'),
+      candidateLayout === 'board' && h('p', { className: 'recruitment-drag-announcement', role: 'status', 'aria-live': 'polite' }, dragState ? `Перенос подбора: ${stageName(dragState.fromStage)}${dragState.toStage ? ` → ${stageName(dragState.toStage)}` : '. Выберите другой этап.'}` : ''),
+      dragState?.inputType === 'touch' && h('div', { className: 'recruitment-drag-preview', 'aria-hidden': true, style: { left: `${dragState.x}px`, top: `${dragState.y}px` } }, h('strong', null, candidateMap.get(data.applications.find(item => item.id === dragState.applicationId)?.candidateId)?.fullName || 'Подбор'), h('span', null, dragState.toStage ? `→ ${stageName(dragState.toStage)}` : 'Выберите этап')),
       pageItems.length ? candidateLayout === 'board' ? candidateBoard() : workTable(pageItems) : empty('Нет кандидатов по выбранным условиям', 'Выберите другую очередь или измените фильтры.', addButton('Добавить кандидата', 'candidates')),
       paging());
     if (tab === 'requests') content = requests.length ? h('div', { className: 'recruitment-request-grid' }, ...requests.map((item) => {
@@ -1057,6 +1103,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
       return h('article', { className: 'recruitment-request-card', key: item.id },
         h('div', { className: 'recruitment-row-heading' }, h('h3', null, item.title), badge(({ open: 'Открыта', paused: 'Пауза', closed: 'Закрыта' })[item.status], item.status === 'open' ? 'is-active' : '')),
         h('p', { className: 'recruitment-meta' }, [projectName(item), item.city, item.district, kindName(item.kind)].filter(Boolean).join(' · ')),
+        !external && requestStatusControl(item),
         h('div', { className: 'recruitment-demand-quantity' }, h('strong', { className: item.quantity == null ? 'is-unspecified' : undefined }, quantityLabel(item.quantity)), h('span', null, item.kind === 'carrier' ? 'машин требуется' : 'водителей требуется'), item.priority === 'urgent' && badge('Срочно', 'is-warning')),
         h('section', { className: 'recruitment-demand-candidates', 'aria-label': 'Кандидаты по потребности' },
           h('div', { className: 'recruitment-row-heading' }, h('strong', null, external ? 'Мои кандидаты' : 'Кандидаты'), badge(requestApplications.length)),
@@ -1064,6 +1111,7 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
           requestApplications.length > 3 && button(`Все кандидаты (${requestApplications.length})`, () => openDemand(item), { className: 'recruitment-text-button' })),
         h('dl', { className: 'recruitment-compact-details' }, !external && h(React.Fragment, null, h('dt', null, 'Ответственный'), h('dd', null, recruiterName(item.recruiterId))), h('dt', null, 'Нужны к'), h('dd', null, dateLabel(item.neededBy)), h('dt', null, 'Кандидатов'), h('dd', null, requestApplications.length), item.schedule && h(React.Fragment, null, h('dt', null, 'График'), h('dd', null, item.schedule))),
         item.payTerms && h('p', { className: 'recruitment-note' }, item.payTerms),
+        hhAction(item),
         h('div', { className: 'recruitment-card-bottom' }, button('Подробнее о потребности', () => openDemand(item), { className: 'recruitment-text-button' }), !external && button('Изменить потребность', () => openForm('requests', item), { className: 'recruitment-text-button' }), hhLink(item.hhUrl)),
         item.status !== 'closed' && button('Подобрать кандидата', () => openForm('applications', null, { requestId: item.id, recruiterId: external ? actor.id : item.recruiterId }), { className: 'button', disabled: saving }));
     })) : empty(onlyWithCandidates ? 'Нет потребностей с кандидатами по выбранным фильтрам' : external ? 'Нет доступных потребностей' : 'Потребностей пока нет', onlyWithCandidates ? 'Снимите фильтр «С кандидатами» или измените другие фильтры.' : external ? 'Компания назначает вам потребности и срок доступа. Если назначение уже было, измените фильтры или обратитесь к компании.' : 'Добавьте проект для водителей ЕЦЛ или потребность в перевозчиках: условия, машины, количество и срок.', onlyWithCandidates ? button('Показать все потребности', () => setOnlyWithCandidates(false)) : addButton('Создать потребность', 'requests'));
@@ -1125,36 +1173,36 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
         : !companyLoading && empty('Нет активности за этот период', 'События появятся после входа рекрутера, открытия потребности или работы с подбором. Старые просмотры не создаются задним числом.'));
 
     return h('div', { className: 'recruitment-workspace' },
-      h('header', { className: 'recruitment-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, 'КОМАНДА И ПОДБОР'), h('h1', null, 'Рекрутинг'), h('p', null, 'Общая база кандидатов и потребностей компании.')), h('div', { className: 'recruitment-heading-actions' },
-        hhLink('https://hh.ru/employer', 'Открыть hh ↗'), button('Обновить', () => { if (confirmDiscard()) { clearForm(); scopeId ? setRefreshKey((value) => value + 1) : setContextKey((value) => value + 1); } }, { disabled: contextLoading || loading || saving }))),
+      h('header', { className: 'recruitment-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, 'КОМАНДА И ПОДБОР'), h('h1', null, onboardingOnly ? 'Оформление' : 'Рекрутинг'), h('p', null, onboardingOnly ? 'Анкеты кандидатов, договоры и шаблоны документов.' : 'Общая база кандидатов и потребностей компании.')), h('div', { className: 'recruitment-heading-actions' },
+        !onboardingOnly && hhLink('https://hh.ru/employer', 'Открыть hh ↗'), button('Обновить', () => { if (confirmDiscard()) { clearForm(); scopeId ? setRefreshKey((value) => value + 1) : setContextKey((value) => value + 1); } }, { disabled: contextLoading || loading || saving }))),
       external && h('div', { className: 'recruitment-observation-notice', role: 'note' }, h('strong', null, 'Компания видит вашу активность'), h('p', null, 'Учитываются входы в раздел, загрузки данных, просмотры потребностей и действия по подбору. Вы видите назначенные потребности и своих кандидатов.')),
-      contextLoading ? h('div', { className: 'recruitment-loading', role: 'status' }, 'Загружаем рекрутинг…') : !scopes.length && !error ? empty('Рекрутинг недоступен', external ? 'Компания должна назначить вам потребности и срок доступа. После назначения обновите данные.' : 'Администратор должен предоставить доступ к рекрутингу и персональным данным компании.') : null,
+      contextLoading ? h('div', { className: 'recruitment-loading', role: 'status' }, onboardingOnly ? 'Загружаем оформление…' : 'Загружаем рекрутинг…') : !scopes.length && !error ? empty(onboardingOnly ? 'Оформление недоступно' : 'Рекрутинг недоступен', external ? 'Компания должна назначить вам потребности и срок доступа. После назначения обновите данные.' : 'Администратор должен предоставить доступ к рекрутингу и персональным данным компании.') : null,
       error && h('div', { className: 'recruitment-error', role: 'alert' }, error),
       message && h('div', { className: 'recruitment-feedback', role: 'status' }, message),
       scopes.length > 0 && h(React.Fragment, null,
-        h('nav', { className: 'recruitment-tabs', 'aria-label': 'Разделы рекрутинга' }, ...tabs.map(([id, name]) => button(name, () => navigate(id), { key: id, 'aria-pressed': tab === id, disabled: saving }))),
-        !['access', 'activity', 'imports', 'onboarding'].includes(tab) && h('div', { className: 'recruitment-filters' },
-          field('Поиск', h('input', { type: 'search', value: filter.search, disabled: Boolean(stageEdit) || saving, placeholder: tab === 'requests' ? 'Название потребности' : 'Имя, телефон, потребность', onChange: (event) => setFilter({ ...filter, search: event.target.value }) })),
-          field(tab === 'requests' ? 'Город потребности' : 'Город кандидата', h('select', { value: filter.city, disabled: Boolean(stageEdit) || saving, onChange: (event) => setFilter({ ...filter, city: event.target.value }) }, h('option', { value: '' }, 'Все города'), ...cities.map((city) => h('option', { key: city, value: city }, city)))),
-          field('Направление', h('select', { value: filter.kind, disabled: Boolean(stageEdit) || saving, onChange: (event) => setFilter({ ...filter, kind: event.target.value }) }, h('option', { value: '' }, 'Все направления'), ...KINDS.map(([id, label]) => h('option', { key: id, value: id }, label)))),
-          !external && field(tab === 'requests' ? 'Ответственный за потребность' : 'Рекрутер', h('select', { value: filter.recruiter, disabled: Boolean(stageEdit) || saving, onChange: (event) => setFilter({ ...filter, recruiter: event.target.value }) }, h('option', { value: '' }, tab === 'requests' ? 'Все ответственные' : 'Все рекрутеры'), ...(tab === 'requests' ? data.requestRecruiters || data.recruiters : data.recruiters).map((item) => h('option', { key: item.id, value: item.id }, item.name))))),
+        !onboardingOnly && h('nav', { className: 'recruitment-tabs', 'aria-label': 'Разделы рекрутинга' }, ...tabs.map(([id, name]) => button(name, () => navigate(id), { key: id, 'aria-pressed': tab === id, disabled: saving }))),
+        !['access', 'activity', 'onboarding'].includes(tab) && h('div', { className: 'recruitment-filters' },
+          field('Поиск', h('input', { type: 'search', value: filter.search, disabled: Boolean(stageEdit || requestStatusEdit) || saving, placeholder: tab === 'requests' ? 'Название потребности' : 'Имя, телефон, потребность', onChange: (event) => setFilter({ ...filter, search: event.target.value }) })),
+          field(tab === 'requests' ? 'Город потребности' : 'Город кандидата', h('select', { value: filter.city, disabled: Boolean(stageEdit || requestStatusEdit) || saving, onChange: (event) => setFilter({ ...filter, city: event.target.value }) }, h('option', { value: '' }, 'Все города'), ...cities.map((city) => h('option', { key: city, value: city }, city)))),
+          field('Направление', h('select', { value: filter.kind, disabled: Boolean(stageEdit || requestStatusEdit) || saving, onChange: (event) => setFilter({ ...filter, kind: event.target.value }) }, h('option', { value: '' }, 'Все направления'), ...KINDS.map(([id, label]) => h('option', { key: id, value: id }, label)))),
+          !external && field(tab === 'requests' ? 'Ответственный за потребность' : 'Рекрутер', h('select', { value: filter.recruiter, disabled: Boolean(stageEdit || requestStatusEdit) || saving, onChange: (event) => setFilter({ ...filter, recruiter: event.target.value }) }, h('option', { value: '' }, tab === 'requests' ? 'Все ответственные' : 'Все рекрутеры'), ...(tab === 'requests' ? data.requestRecruiters || data.recruiters : data.recruiters).map((item) => h('option', { key: item.id, value: item.id }, item.name))))),
         paginated && h('div', { className: 'recruitment-work-extra-filters' },
-          field('Источник привлечения', h('select', { value: filter.source || '', disabled: Boolean(stageEdit) || saving, onChange: event => setFilter({ ...filter, source: event.target.value }) }, h('option', { value: '' }, 'Все источники'), ...SOURCES.map(([id, label]) => h('option', { key: id, value: id }, label)))),
-          field('Этап', h('select', { value: filter.stage || '', disabled: Boolean(stageEdit) || saving, onChange: event => setFilter({ ...filter, stage: event.target.value }) }, h('option', { value: '' }, 'Все этапы'), ...STAGES.map(([id, label]) => h('option', { key: id, value: id }, label)))),
+          field('Источник привлечения', h('select', { value: filter.source || '', disabled: Boolean(stageEdit || requestStatusEdit) || saving, onChange: event => setFilter({ ...filter, source: event.target.value }) }, h('option', { value: '' }, 'Все источники'), ...SOURCES.map(([id, label]) => h('option', { key: id, value: id }, label)))),
+          field('Этап', h('select', { value: filter.stage || '', disabled: Boolean(stageEdit || requestStatusEdit) || saving, onChange: event => setFilter({ ...filter, stage: event.target.value }) }, h('option', { value: '' }, 'Все этапы'), ...STAGES.map(([id, label]) => h('option', { key: id, value: id }, label)))),
           !external && button('Мои', () => setFilter({ ...filter, recruiter: filter.recruiter === actor?.id ? '' : actor?.id || '' }), { 'aria-pressed': filter.recruiter === actor?.id, disabled: saving || Boolean(stageEdit) })),
         loading ? h('div', { className: 'recruitment-loading', role: 'status' }, 'Загружаем подбор…') : !error && h(React.Fragment, null,
-          !['access', 'activity', 'candidates', 'imports', 'onboarding'].includes(tab) && h('div', { className: 'recruitment-metrics' }, metric('Кандидаты', metricCandidateCount, tab === 'requests' ? 'В выбранных потребностях' : 'Уникальные карточки'), metric('Подборы', metricApplications.length, 'Кандидат + потребность'), metric('На этапе выхода', metricApplications.filter((item) => item.stage === 'hired').length, 'Плановый этап, включая подтверждённые'), tab === 'requests' ? metric('Потребности с кандидатами', requests.filter((item) => applicationsByRequest.has(item.id)).length, 'По выбранным фильтрам') : metric('Пора выполнить', dueCount, 'Задачи по выбранным фильтрам')),
-          h('div', { className: 'recruitment-workbar' }, h('div', null, h('h2', null, tabs.find(([id]) => id === tab)?.[1]), paginated && h('p', { className: 'recruitment-meta' }, `${worklist.total || 0} кандидатов по выбранным условиям`), tab === 'requests' && h('p', { className: 'recruitment-meta' }, `Открыто: ${openRequests.length} · нужно водителей: ${openRequests.filter((item) => item.kind === 'driver').reduce((sum, item) => sum + item.quantity, 0)} · машин: ${openRequests.filter((item) => item.kind === 'carrier').reduce((sum, item) => sum + item.quantity, 0)}`)),
-            h('div', { className: 'recruitment-actions' }, paginated && h('label', { className: 'recruitment-check' }, h('input', { type: 'checkbox', checked: showArchive, disabled: Boolean(stageEdit) || saving, onChange: (event) => setShowArchive(event.target.checked) }), 'Только архив'),
-              tab === 'requests' && h('label', { className: 'recruitment-check' }, h('input', { type: 'checkbox', checked: onlyWithCandidates, onChange: (event) => setOnlyWithCandidates(event.target.checked) }), 'С кандидатами'),
+          !['access', 'activity', 'candidates', 'onboarding'].includes(tab) && h('div', { className: 'recruitment-metrics' }, metric('Кандидаты', metricCandidateCount, tab === 'requests' ? 'В выбранных потребностях' : 'Уникальные карточки'), metric('Подборы', metricApplications.length, 'Кандидат + потребность'), metric('На этапе выхода', metricApplications.filter((item) => item.stage === 'hired').length, 'Плановый этап, включая подтверждённые'), tab === 'requests' ? metric('Потребности с кандидатами', requests.filter((item) => applicationsByRequest.has(item.id)).length, 'По выбранным фильтрам') : metric('Пора выполнить', dueCount, 'Задачи по выбранным фильтрам')),
+          !onboardingOnly && h('div', { className: 'recruitment-workbar' }, h('div', null, h('h2', null, tabs.find(([id]) => id === tab)?.[1]), paginated && h('p', { className: 'recruitment-meta' }, `${worklist.total || 0} кандидатов по выбранным условиям`), tab === 'requests' && h('p', { className: 'recruitment-meta' }, `Открыто: ${openRequests.length} · нужно водителей: ${openRequests.filter((item) => item.kind === 'driver').reduce((sum, item) => sum + item.quantity, 0)} · машин: ${openRequests.filter((item) => item.kind === 'carrier').reduce((sum, item) => sum + item.quantity, 0)}`)),
+            h('div', { className: 'recruitment-actions' }, paginated && h('label', { className: 'recruitment-check' }, h('input', { type: 'checkbox', checked: showArchive, disabled: Boolean(stageEdit || requestStatusEdit) || saving, onChange: (event) => setShowArchive(event.target.checked) }), 'Только архив'),
+              tab === 'requests' && h('label', { className: 'recruitment-check' }, h('input', { type: 'checkbox', checked: onlyWithCandidates, disabled: saving || Boolean(requestStatusEdit), onChange: (event) => setOnlyWithCandidates(event.target.checked) }), 'С кандидатами'),
               paginated && !showArchive && candidateLayout === 'board' && addButton('Добавить в подбор', 'applications'), paginated && addButton('Добавить кандидата', 'candidates'), tab === 'requests' && !external && addButton('Создать потребность', 'requests'), tab === 'tasks' && addButton('Добавить задачу', 'tasks'))),
-          tab === 'requests' && h('div', { className: 'recruitment-segment recruitment-request-directions', 'aria-label': 'Списки потребностей' }, ...[['', 'Все потребности'], ['driver', 'Проекты · водители ЕЦЛ'], ['carrier', 'Перевозчики · машины']].map(([id, label]) => button(label, () => setFilter({ ...filter, kind: id }), { key: id, 'aria-pressed': filter.kind === id }))),
+          tab === 'requests' && h('div', { className: 'recruitment-segment recruitment-request-directions', 'aria-label': 'Списки потребностей' }, ...[['', 'Все потребности'], ['driver', 'Проекты · водители ЕЦЛ'], ['carrier', 'Перевозчики · машины']].map(([id, label]) => button(label, () => setFilter({ ...filter, kind: id }), { key: id, 'aria-pressed': filter.kind === id, disabled: saving || Boolean(requestStatusEdit) }))),
           detailId && !detail && detailLoading && h('p', { className: 'recruitment-meta', role: 'status' }, 'Открываем карточку кандидата…'),
           content,
-          tab !== 'onboarding' && h('footer', { className: 'recruitment-footer' }, h('span', null, 'hh — переход на сайт для переписки'), h('span', null, 'Авторассылки в мессенджеры не подключены')))),
+          tab !== 'onboarding' && h('footer', { className: 'recruitment-footer' }, h('span', null, 'hh — размещение из потребности и переписка на сайте'), h('span', null, 'Авторассылки в мессенджеры не подключены')))),
       demandDetail && !form && h('div', { className: 'recruitment-overlay' }, h('section', { className: 'recruitment-dialog recruitment-detail', role: 'dialog', 'aria-modal': true, 'aria-label': `Потребность ${demandDetail.title}` },
         h('div', { className: 'recruitment-dialog-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, demandDetail.kind === 'carrier' ? 'ПЕРЕВОЗЧИКИ · МАШИНЫ' : 'ПРОЕКТЫ · ВОДИТЕЛИ ЕЦЛ'), h('h2', null, demandDetail.title)), button('Закрыть потребность', () => setDemandId(null), { className: 'recruitment-text-button' })),
-        h('div', { className: 'recruitment-detail-body' }, h('div', { className: 'recruitment-actions' }, badge(({ open: 'Открыта', paused: 'Пауза', closed: 'Закрыта' })[demandDetail.status], demandDetail.status === 'open' ? 'is-active' : ''), demandDetail.priority === 'urgent' && badge('Срочно', 'is-warning'), hhLink(demandDetail.hhUrl)),
+        h('div', { className: 'recruitment-detail-body' }, h('div', { className: 'recruitment-actions' }, badge(({ open: 'Открыта', paused: 'Пауза', closed: 'Закрыта' })[demandDetail.status], demandDetail.status === 'open' ? 'is-active' : ''), demandDetail.priority === 'urgent' && badge('Срочно', 'is-warning'), hhAction(demandDetail), hhLink(demandDetail.hhUrl)),
           h('section', { className: 'recruitment-detail-section', 'aria-label': 'Кандидаты по потребности' },
             h('h3', null, `${external ? 'Мои кандидаты' : 'Кандидаты по потребности'} · ${demandApps.length}`),
             demandApps.length ? demandApps.map((application) => demandCandidate(application)) : h('p', { className: 'recruitment-meta' }, 'Пока никто не добавлен в эту потребность.')),
@@ -1165,13 +1213,13 @@ export function createRecruitmentPanel(React, { request, OnboardingPanel }) {
           h('div', { className: 'recruitment-actions' }, demandDetail.status !== 'closed' && button('Подобрать кандидата', () => openForm('applications', null, { requestId: demandDetail.id, recruiterId: external ? actor.id : demandDetail.recruiterId }), { className: 'button recruitment-primary', disabled: saving }), !external && button('Изменить потребность', () => openForm('requests', demandDetail))),
           external && h('p', { className: 'recruitment-meta' }, 'Открытие этой потребности учитывается в отчёте активности компании.')))),
       detail && !form && h('div', { className: 'recruitment-overlay' }, h('section', { className: 'recruitment-dialog recruitment-detail', role: 'dialog', 'aria-modal': true, 'aria-label': `Карточка ${detail.fullName}` },
-        h('div', { className: 'recruitment-dialog-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, 'КАРТОЧКА КАНДИДАТА'), h('h2', null, detail.fullName)), button('Закрыть карточку', () => setDetailId(null), { className: 'recruitment-text-button' })),
+        h('div', { className: 'recruitment-dialog-heading' }, h('div', null, h('span', { className: 'recruitment-eyebrow' }, 'КАРТОЧКА КАНДИДАТА'), h('h2', null, detail.fullName)), button('Закрыть карточку', closeDetail, { className: 'recruitment-text-button', disabled: saving })),
         h('div', { className: 'recruitment-detail-body' }, detailLoading && h('p', { className: 'recruitment-meta', role: 'status' }, 'Обновляем историю кандидата…'), h('div', { className: 'recruitment-actions' }, badge(kindName(detail.kind)), detail.archived && badge('Архив'), h('a', { className: 'recruitment-phone', href: `tel:${detail.phone}` }, detail.phone), hhLink(detail.hhUrl)),
           h('dl', { className: 'recruitment-detail-fields' }, ...[['Город / район', [detail.city, detail.district].filter(Boolean).join(' · ')], ['Рекрутер', recruiterName(detail.recruiterId)], ['Источник', sourceName(detail.source)], ['Права / опыт', [detail.licenseCategories, detail.experience].filter(Boolean).join(' · ')], ...(detail.kind === 'carrier' ? [['Автомобиль', detail.vehicleType], ['Габариты / грузоподъёмность', [detail.vehicleDimensions, detail.vehicleCapacity].filter(Boolean).join(' · ')]] : [])].map(([label, value]) => h('div', { key: label }, h('dt', null, label), h('dd', null, value || 'Не указано')))),
           detail.notes && h('p', { className: 'recruitment-note' }, detail.notes),
-          h('div', { className: 'recruitment-actions' }, !external && OnboardingPanel && button('Оформить кандидата', () => { if (!confirmDiscard()) return; setOnboardingCandidateId(detail.id); navigate('onboarding'); }, { className: 'button recruitment-primary', disabled: detail.archived }), button('Изменить кандидата', () => openForm('candidates', detail)), button('Добавить в подбор', () => openForm('applications', null, { candidateId: detail.id, recruiterId: detail.recruiterId }), { disabled: detail.archived }), button('Напомнить о кандидате', () => openForm('tasks', null, { candidateId: detail.id, assigneeId: detail.recruiterId })), button('Записать контакт', () => openForm('contacts', null, { candidateId: detail.id, source: detail.source })), button('Новое обращение', () => openForm('contacts', null, { candidateId: detail.id, result: 'inquiry', source: detail.source }))),
-          h('section', { className: 'recruitment-detail-section' }, h('h3', null, 'Подборы'), linkedApps.length ? linkedApps.map((app) => h('div', { className: 'recruitment-detail-row', key: app.id }, h('div', null, h('strong', null, requestMap.get(app.requestId)?.title || 'Потребность'), h('p', { className: 'recruitment-meta' }, `${projectName(app)} · ${stageName(app.stage)}${app.startDate ? ` · выход ${dateLabel(app.startDate)}` : ''}`), app.reason && h('p', { className: 'recruitment-note' }, app.reason), h('p', { className: 'recruitment-meta' }, `СБ: ${securityName(app.securityStatus)}${app.securityDueAt ? ` · срок ${dateLabel(app.securityDueAt, true)}` : ''}`), app.attendanceStatus === 'confirmed' && badge(`Выход подтверждён · ${dateLabel(app.confirmedStartDate)}`, 'is-active'), app.attendanceStatus === 'no_show' && badge('Не вышел', 'is-warning'), workflowActions(detail, app, linkedTasks.find(task => task.applicationId === app.id && task.status === 'open'))), button('Изменить этап', () => openForm('applications', app), { className: 'recruitment-text-button' }))) : h('p', { className: 'recruitment-meta' }, 'Пока не привязан к потребностям.')),
-          h('section', { className: 'recruitment-detail-section' }, h('h3', null, `Обращения и контакты · ${contactTotal}`), (data.contacts || []).filter(item => item.candidateId === detail.id).length ? h('ol', { className: 'recruitment-history' }, ...data.contacts.filter(item => item.candidateId === detail.id).map(contact => h('li', { key: contact.id }, h('strong', null, CONTACT_RESULTS.find(([id]) => id === contact.result)?.[1] || contact.result), h('span', null, `${dateLabel(contact.occurredAt, true)}${contact.source ? ` · ${sourceName(contact.source)}` : ''}`), contact.notes && h('p', { className: 'recruitment-note' }, contact.notes)))) : h('p', { className: 'recruitment-meta' }, 'Здесь сохраняются отдельные обращения и результаты контактов.'), contactTotal > 50 && h('div', { className: 'recruitment-actions' }, button('Предыдущие контакты', () => setContactPage(value => Math.max(1, value - 1)), { disabled: contactPage === 1 || detailLoading }), h('span', { className: 'recruitment-meta' }, `Страница ${contactPage}`), button('Следующие контакты', () => setContactPage(value => value + 1), { disabled: contactPage * 50 >= contactTotal || detailLoading }))),
+          h('div', { className: 'recruitment-actions' }, !external && OnboardingPanel && onOpenOnboarding && button('Оформить кандидата', () => { if (!confirmDiscard()) return; onOpenOnboarding(detail); }, { className: 'button recruitment-primary', disabled: detail.archived }), button('Изменить кандидата', () => openForm('candidates', detail)), button('Добавить в подбор', () => openForm('applications', null, { candidateId: detail.id, recruiterId: detail.recruiterId }), { disabled: detail.archived }), button('Напомнить о кандидате', () => openForm('tasks', null, { candidateId: detail.id, assigneeId: detail.recruiterId })), button('Записать контакт', () => openForm('contacts', null, { candidateId: detail.id, source: detail.source })), button('Новое обращение', () => openForm('contacts', null, { candidateId: detail.id, result: 'inquiry', source: detail.source }))),
+          h('section', { className: 'recruitment-detail-section' }, h('h3', null, 'Подборы'), linkedApps.length ? linkedApps.map((app) => h('div', { className: 'recruitment-detail-row recruitment-detail-application', key: app.id, 'data-application-id': app.id }, h('div', null, h('strong', null, requestMap.get(app.requestId)?.title || 'Потребность'), h('p', { className: 'recruitment-meta' }, `${projectName(app)} · ${stageName(app.stage)}${app.startDate ? ` · выход ${dateLabel(app.startDate)}` : ''}`), app.reason && h('p', { className: 'recruitment-note' }, app.reason), h('p', { className: 'recruitment-meta' }, `СБ: ${securityName(app.securityStatus)}${app.securityDueAt ? ` · срок ${dateLabel(app.securityDueAt, true)}` : ''}`), app.attendanceStatus === 'confirmed' && badge(`Выход подтверждён · ${dateLabel(app.confirmedStartDate)}`, 'is-active'), app.attendanceStatus === 'no_show' && badge('Не вышел', 'is-warning'), workflowActions(detail, app, linkedTasks.find(task => task.applicationId === app.id && task.status === 'open'))), quickStage(app, { inDetail: true, showTitle: false }))) : h('p', { className: 'recruitment-meta' }, 'Пока не привязан к потребностям.')),
+          h('section', { className: 'recruitment-detail-section' }, h('h3', null, `Обращения и контакты · ${contactTotal}`), (data.contacts || []).filter(item => item.candidateId === detail.id).length ? h('ol', { className: 'recruitment-history' }, ...data.contacts.filter(item => item.candidateId === detail.id).map(contact => h('li', { key: contact.id }, h('strong', null, CONTACT_RESULTS.find(([id]) => id === contact.result)?.[1] || contact.result), h('span', null, `${dateLabel(contact.occurredAt, true)}${contact.source ? ` · ${sourceName(contact.source)}` : ''}`), contact.notes && h('p', { className: 'recruitment-note' }, contact.notes)))) : h('p', { className: 'recruitment-meta' }, 'Здесь сохраняются отдельные обращения и результаты контактов.'), contactTotal > 50 && h('div', { className: 'recruitment-actions' }, button('Предыдущие контакты', () => setContactPage(value => Math.max(1, value - 1)), { disabled: contactPage === 1 || detailLoading || saving }), h('span', { className: 'recruitment-meta' }, `Страница ${contactPage}`), button('Следующие контакты', () => setContactPage(value => value + 1), { disabled: contactPage * 50 >= contactTotal || detailLoading || saving }))),
           (data.workflowEvents || []).some(event => linkedApps.some(app => app.id === event.applicationId)) && h('section', { className: 'recruitment-detail-section' }, h('h3', null, 'История проверок и выходов'), h('ol', { className: 'recruitment-history' }, ...data.workflowEvents.filter(event => linkedApps.some(app => app.id === event.applicationId)).map(event => h('li', { key: event.id }, h('strong', null, event.kind === 'security' ? `СБ: ${securityName(event.payload?.status)}` : event.payload?.status === 'no_show' ? 'Не вышел' : 'Результат выхода'), h('span', null, dateLabel(event.occurredAt || event.createdAt, true)), event.payload?.note && h('p', { className: 'recruitment-note' }, event.payload.note))))),
           h('section', { className: 'recruitment-detail-section' }, h('h3', null, 'Задачи'), linkedTasks.length ? linkedTasks.map(taskCard) : h('p', { className: 'recruitment-meta' }, 'Напоминаний пока нет.')),
           h('section', { className: 'recruitment-detail-section' }, h('h3', null, 'История переходов'), history.length ? h('ol', { className: 'recruitment-history' }, ...history.map((event) => h('li', { key: event.id }, h('strong', null, `${event.fromStage ? `${stageName(event.fromStage)} → ` : ''}${stageName(event.toStage)}`), h('span', null, `${dateLabel(event.occurredAt, true)} · ${requestMap.get(linkedApps.find((app) => app.id === event.applicationId)?.requestId)?.title || ''}`)))) : h('p', { className: 'recruitment-meta' }, 'Переходы появятся после добавления в подбор.'))))),

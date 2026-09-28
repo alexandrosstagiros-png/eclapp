@@ -117,6 +117,7 @@ function normalize(payload,passport) {
   // Keep the existing form key `number` as a complete passport number. Preserve
   // its components for forms which deliberately use separate fields.
   if (fields.document_number) fields.number = [fields.series,fields.document_number].filter(Boolean).join(' ');
+  if (fields.surname && fields.name) fields.full_name = [fields.surname,fields.name,fields.middle_name].filter(Boolean).join(' ');
   if (!lines.length) throw noText();
   return {text:lines.join('\n'),fields,model:'vk-docs'};
 }

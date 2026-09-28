@@ -255,6 +255,50 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     assert.equal(await page.getByLabel('Поиск', { exact: true }).inputValue(), 'Тест быстрого статуса');
     console.log('PASS 409 preserves concurrent edits and explicit refresh enables a new save');
 
+    // The full candidate card uses the same inline editor for each distinct application.
+    await card(page, candidate).getByRole('button', { name: candidate.fullName, exact: true }).click();
+    const detail = page.getByRole('dialog', { name: `Карточка ${candidate.fullName}`, exact: true });
+    const detailStage = demand => detail.getByLabel(`Статус подбора · ${demand.title}`, { exact: true });
+    await detailStage(demands[0]).waitFor();
+    assert.equal(await detail.locator('.recruitment-quick-stage').count(), 2);
+    assert.equal(await detailStage(demands[0]).inputValue(), 'interview');
+    assert.equal(await detailStage(demands[1]).inputValue(), 'rejected');
+    const detailSaving = page.waitForResponse(isApplicationPut);
+    await detailStage(demands[0]).selectOption('qualified');
+    const detailResponse = await detailSaving;
+    assert.equal(detailResponse.status(), 200, await detailResponse.text());
+    assert.equal((await detailResponse.json()).id, applications[0].id);
+    await detail.getByText('Статус сохранён', { exact: true }).waitFor();
+    assert.equal(await detailStage(demands[1]).inputValue(), 'rejected', 'The other application in the full card is unchanged');
+    assert.equal(await page.getByRole('dialog').count(), 1, 'Changing stage does not open another form');
+    await page.waitForFunction(label => {
+      const control = document.querySelector(`[role="dialog"] select[aria-label="${label}"]`);
+      return control && !control.disabled;
+    }, `Статус подбора · ${demands[0].title}`);
+    const detailBeforeConflict = (await snapshot()).applications.find(item => item.id === applications[0].id);
+    const detailConcurrent = await save('applications', { ...detailBeforeConflict, stage: 'interview', reason: 'Параллельное изменение при открытой карточке' });
+    let detailPending = page.waitForResponse(isApplicationPut);
+    await detailStage(demands[0]).selectOption('reserve');
+    assert.equal((await detailPending).status(), 409);
+    await detail.getByRole('alert').waitFor();
+    assert.equal(await detailStage(demands[0]).isDisabled(), true);
+    await detail.getByRole('button', { name: 'Обновить данные', exact: true }).click();
+    await page.waitForFunction(label => {
+      const control = document.querySelector(`[role="dialog"] select[aria-label="${label}"]`);
+      return control && control.value === 'interview' && !control.disabled;
+    }, `Статус подбора · ${demands[0].title}`);
+    detailPending = page.waitForResponse(isApplicationPut);
+    await detailStage(demands[0]).selectOption('qualified');
+    const detailRetried = await detailPending;
+    assert.equal(detailRetried.status(), 200, await detailRetried.text());
+    const detailSaved = await detailRetried.json();
+    assert.equal(detailSaved.version, detailConcurrent.version + 1);
+    assert.equal(detailSaved.reason, detailConcurrent.reason);
+    await detail.getByText('Статус сохранён', { exact: true }).waitFor();
+    await detail.getByRole('button', { name: 'Закрыть карточку', exact: true }).click();
+    assert.equal(await firstStage().inputValue(), 'qualified', 'The candidate list reflects the confirmed detail edit');
+    console.log('PASS full candidate detail changes only the selected application inline; conflict refresh preserves the concurrent version and fields');
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.getByLabel('Поиск', { exact: true }).fill(candidate.fullName);
     await firstStage().selectOption('hired');

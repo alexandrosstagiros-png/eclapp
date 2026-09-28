@@ -56,12 +56,37 @@ function recipients(value = []) {
   return [...new Set(value.map(value => id(value, 'recipientIds')))].sort();
 }
 function scheduleInput(input) {
-  record(input, ['id', 'responsibilityScopeId', 'enabled', 'frequency', 'time', 'timeZone', 'weekday', 'recipientIds']);
+  record(input, ['id', 'responsibilityScopeId', 'enabled', 'frequency', 'time', 'timeZone', 'weekday', 'recipientIds', 'reportKind', 'sourceScopeIds', 'reportDayOffset', 'conversationId']);
   if (typeof input.enabled !== 'boolean' || !['daily', 'weekly'].includes(input.frequency) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(input.time || '') || typeof input.timeZone !== 'string' || input.timeZone.length > 80) throw new BadRequestException('Некорректное расписание');
   const weekday = input.weekday ?? 1;
   if (!Number.isInteger(weekday) || weekday < 1 || weekday > 7) throw new BadRequestException('День недели должен быть от 1 до 7');
   formatter(input.timeZone);
-  return { ...(input.id ? { id: id(input.id) } : {}), responsibilityScopeId: id(input.responsibilityScopeId, 'responsibilityScopeId'), enabled: input.enabled, frequency: input.frequency, time: input.time, timeZone: input.timeZone, weekday, recipientIds: recipients(input.recipientIds) };
+  const responsibilityScopeId = id(input.responsibilityScopeId, 'responsibilityScopeId');
+  const reportKind = input.reportKind ?? 'conversation_summary', reportDayOffset = input.reportDayOffset ?? 0;
+  if (!['conversation_summary', 'fleet_release'].includes(reportKind) || ![0, 1].includes(reportDayOffset)) throw new BadRequestException('Некорректный вид или день отчёта');
+  const recipientIds = recipients(input.recipientIds);
+  const conversationId = input.conversationId == null ? null : id(input.conversationId, 'conversationId');
+  const sourceScopeIds = reportKind === 'fleet_release' ? fleetSourceIds(input.sourceScopeIds) : [];
+  if (reportKind === 'fleet_release' && (input.frequency !== 'daily' || recipientIds.length)) throw new BadRequestException('Отчёт о выпуске публикуется ежедневно в чате «Отчеты», без списка получателей');
+  if (reportKind === 'conversation_summary' && (reportDayOffset !== 0 || (input.sourceScopeIds !== undefined && (!Array.isArray(input.sourceScopeIds) || input.sourceScopeIds.length)))) throw new BadRequestException('Источники выпуска относятся только к отчёту о выпуске');
+  return { ...(input.id ? { id: id(input.id) } : {}), responsibilityScopeId, enabled: input.enabled, frequency: input.frequency, time: input.time, timeZone: input.timeZone, weekday, recipientIds, reportKind, sourceScopeIds, reportDayOffset, conversationId };
+}
+function fleetSourceIds(value) {
+  // An empty list keeps the schedule automatic as operational data changes.
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 100) throw new BadRequestException('Некорректные источники отчёта');
+  return [...new Set(value.map(value => id(value, 'sourceScopeIds')))].sort();
+}
+function fleetReportInput(input, query = false) {
+  record(input, ['responsibilityScopeId', 'businessDate', 'sourceScopeIds', 'conversationId']);
+  const responsibilityScopeId = id(input.responsibilityScopeId, 'responsibilityScopeId'), businessDate = input.businessDate;
+  if (typeof businessDate !== 'string' || !/^20\d{2}-\d{2}-\d{2}$/.test(businessDate) || !Number.isFinite(Date.parse(businessDate)) || new Date(businessDate).toISOString().slice(0, 10) !== businessDate) throw new BadRequestException('Укажите корректную дату отчёта');
+  const selected = query && typeof input.sourceScopeIds === 'string' ? (input.sourceScopeIds === '' ? [] : input.sourceScopeIds.split(',')) : input.sourceScopeIds;
+  return { responsibilityScopeId, businessDate, sourceScopeIds: fleetSourceIds(selected), conversationId: input.conversationId == null ? null : id(input.conversationId, 'conversationId') };
+}
+function reportBusinessDate(scheduledFor, timeZone, offset = 0) {
+  const parts = localParts(scheduledFor, timeZone);
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day - offset)).toISOString().slice(0, 10);
 }
 function periodInput(input, now = new Date()) {
   record(input, ['responsibilityScopeId', 'periodStart', 'periodEnd']);
@@ -102,4 +127,27 @@ function extractDigest(messages) {
   const overview = `Обработано ${messages.length} сообщений из ${conversations.size} переписок: ${directMessageCount} личных сообщений, ${branchMessageCount} ответов в ветках. В ${classifiedMessageCount} сообщениях найдены ключевые слова задач, роста, оптимизации или рисков. Остальные ${messages.length - classifiedMessageCount} сообщений также учтены. Ниже — дословные выдержки; категории определены эвристически и требуют проверки человеком.`;
   return { mode: 'extractive', overview, items, sourceMessageIds, messageCount: messages.length, classifiedMessageCount, directMessageCount, branchMessageCount };
 }
-module.exports = { nextRun, previousRun, scheduleInput, periodInput, extractDigest, recipients, record, id };
+function summaryPublicationText(report) {
+  const labels = { task: 'Задачи', growth: 'Возможности роста', optimization: 'Оптимизация', risk: 'Угрозы' };
+  const parts = [report.title, `${new Date(report.periodStart).toISOString().slice(0, 10)} — ${new Date(report.periodEnd).toISOString().slice(0, 10)} · ${report.messageCount} сообщений`,
+    report.mode === 'ai' ? 'Сводка ИИ. Проверьте выводы по исходной переписке.' : 'Дословные выдержки из переписки. Категории определены автоматически.', report.overview];
+  const suffix = `\n\nПолная сводка: раздел «Нейросети» → «Сводки». ID: ${report.id}`;
+  let result = parts.join('\n\n'), omitted = false;
+  const max = 12000 - suffix.length - 110;
+  if (result.length > max) { result = result.slice(0, max); omitted = true; }
+  for (const category of Object.keys(labels)) {
+    const items = (report.items || []).filter(item => item.category === category);
+    if (!items.length) continue;
+    const heading = `\n\n${labels[category]}`;
+    if (result.length + heading.length > max) { omitted = true; break; }
+    result += heading;
+    for (const item of items) {
+      const line = `\n• ${item.text}`;
+      if (result.length + line.length > max) { omitted = true; continue; }
+      result += line;
+    }
+  }
+  if (omitted) result += '\n\nПубликация сокращена до лимита сообщения. Полный текст сохранён в сводке.';
+  return result + suffix;
+}
+module.exports = { summaryPublicationText, nextRun, previousRun, scheduleInput, periodInput, extractDigest, recipients, record, id, fleetReportInput, fleetSourceIds, reportBusinessDate };

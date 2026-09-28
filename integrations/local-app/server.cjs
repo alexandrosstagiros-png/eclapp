@@ -12,7 +12,7 @@ const { paths, PORT, PG_PORT, ORIGIN, appRequire, ensureDirectory, atomicJson, r
 const PHONE = '+79990000001';
 const BANNER = '<aside class="local-app-banner" role="note"><strong>Локальный тест ЕЦЛ</strong><span>Изменения приложения сохраняются на этом Mac. Передача в 1С — отдельной кнопкой.</span></aside>';
 const BANNER_CSS = '.local-app-banner{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:4px 14px;box-sizing:border-box;padding:9px 18px;background:#edf4ff;color:#315680;border-bottom:1px solid #cedcf1;font:12px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.local-app-banner strong{font-weight:700}.local-app-banner span{font-size:11px}html[data-theme="dark"] .local-app-banner{background:#172b44;color:#b7cee9;border-color:#2a425e}@media(max-width:600px){.local-app-banner{justify-content:flex-start;padding:8px 12px}.local-app-banner span{font-size:10px}}';
-const CSS_FILES = ['app.css', 'planning.css', 'planning-builder.css', 'planning-calendar.css', 'recruitment.css', 'recruitment-onboarding.css', 'tenders.css', 'fleet-maintenance.css', 'fleet-operations.css', 'team.css', 'driver-requests.css', 'team-tasks.css', 'team-outcomes.css', 'profile.css', 'birthdays.css', 'attachment-photos.css', 'inspection-workflow.css', 'employee-planning-access.css', 'local-one-c.css'];
+const CSS_FILES = ['app.css', 'planning.css', 'planning-builder.css', 'planning-calendar.css', 'recruitment.css', 'recruitment-onboarding.css', 'tenders.css', 'fleet-maintenance.css', 'fleet-operations.css', 'team.css', 'driver-requests.css', 'team-tasks.css', 'team-outcomes.css', 'profile.css', 'birthdays.css', 'attachment-photos.css', 'inspection-workflow.css', 'employee-planning-access.css', 'neural.css', 'local-one-c.css'];
 
 function ownProcess(pid) {
   if (!Number.isInteger(pid) || pid <= 1) return false;
@@ -119,7 +119,16 @@ async function main() {
       if(config?.provider!=='vk' || typeof config.token!=='string' || !config.token.trim() || config.token.length>4096 || /[\u0000-\u0020\u007f]/.test(config.token))throw new Error('Проверьте локальную настройку VK OCR.');
       environment.VK_OCR_TOKEN=config.token;
     }
+    const dadataPath = path.join(paths.data, 'dadata.json');
+    const dadataStat = await fs.stat(dadataPath).catch(error => { if(error.code==='ENOENT')return null;throw error; });
+    if(dadataStat) {
+      if(dadataStat.size>4096 || (dadataStat.mode & 0o077))throw new Error('Локальная настройка DaData должна иметь права 0600 и размер не более 4 КБ.');
+      const config=await readJson(dadataPath);
+      if(config?.provider!=='dadata' || typeof config.apiKey!=='string' || !/^[A-Za-z0-9_-]{16,256}$/.test(config.apiKey))throw new Error('Проверьте локальную настройку DaData.');
+      environment.DADATA_API_KEY=config.apiKey;
+    }
     environment.ONBOARDING_PHOTO_DIR=path.join(paths.root,'.local','onboarding-photos');
+    Object.assign(environment, await require('./neural-config.cjs').readNeuralEnvironment(path.join(paths.data, 'neural.json')));
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, environment);
     const nativeName = `@embedded-postgres/${process.platform === 'win32' ? 'windows' : process.platform}-${process.arch}`;

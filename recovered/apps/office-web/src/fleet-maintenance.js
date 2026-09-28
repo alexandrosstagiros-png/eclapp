@@ -91,11 +91,101 @@ const dateError = (filters) =>
     ? "Начало периода позже конца. Исправьте даты для расчёта."
     : "";
 
+export function createWorkOrderPriceAnalysis(React, { request }) {
+  const { createElement: h, useEffect, useRef, useState } = React;
+  const STATUS = { above_history: "Выше истории", below_history: "Ниже истории", within_history: "В пределах истории", insufficient_data: "Недостаточно данных" };
+  return function WorkOrderPriceAnalysis({ token, onExpired, responsibilityScopeId, orderId }) {
+    const [scopes, setScopes] = useState([]), [scope, setScope] = useState(responsibilityScopeId || ""),
+      [orders, setOrders] = useState({ items: [], total: 0 }), [selected, setSelected] = useState(orderId || ""),
+      [search, setSearch] = useState(""), [loading, setLoading] = useState(false), [busy, setBusy] = useState(false),
+      [result, setResult] = useState(null), [error, setError] = useState("");
+    const generation = useRef(0), busyRef = useRef(false), callbacks = useRef({ onExpired });
+    callbacks.current = { onExpired };
+    const selectedScope = responsibilityScopeId || scope, selectedOrder = orderId || selected;
+    const auth = useRef(token); auth.current = token;
+    function fail(reason) { if (reason?.status === 401) callbacks.current.onExpired?.(); setError(reason?.message || "Не удалось выполнить анализ цен."); }
+    useEffect(() => {
+      generation.current++; busyRef.current = false; setBusy(false); setResult(null); setError("");
+      return () => { generation.current++; };
+    }, [token, selectedScope, selectedOrder]);
+    useEffect(() => {
+      if (responsibilityScopeId) return;
+      const controller = new AbortController(); setLoading(true); setScopes([]); setScope("");
+      request(`${API}/context`, { signal: controller.signal }, token).then(data => {
+        if (controller.signal.aborted) return;
+        setScopes(data.scopes || []); setScope(data.defaultResponsibilityScopeId || data.scopes?.[0]?.responsibilityScopeId || "");
+      }).catch(reason => { if (!controller.signal.aborted) fail(reason); })
+        .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      return () => controller.abort();
+    }, [token, responsibilityScopeId]);
+    useEffect(() => {
+      if (orderId || !selectedScope) { setOrders({ items: [], total: 0 }); return; }
+      const controller = new AbortController(); setLoading(true); setError(""); setSelected(""); setOrders({ items: [], total: 0 });
+      const timer = setTimeout(() => {
+        const query = new URLSearchParams({ responsibilityScopeId: selectedScope, search });
+        request(`${API}/price-analysis/orders?${query}`, { signal: controller.signal }, token).then(data => {
+          if (!controller.signal.aborted) { setOrders(data); setSelected(data.items[0]?.orderId || ""); }
+        }).catch(reason => { if (!controller.signal.aborted) fail(reason); })
+          .finally(() => { if (!controller.signal.aborted) setLoading(false); });
+      }, search ? 250 : 0);
+      return () => { clearTimeout(timer); controller.abort(); };
+    }, [token, selectedScope, orderId, search]);
+    async function analyze() {
+      if (!selectedScope || !selectedOrder || busyRef.current || loading) return;
+      const sequence = ++generation.current, authToken = token;
+      busyRef.current = true; setBusy(true); setError(""); setResult(null);
+      try {
+        const data = await request(`${API}/price-analysis`, { method: "POST", body: JSON.stringify({ responsibilityScopeId: selectedScope, orderId: selectedOrder }) }, token);
+        if (sequence === generation.current && auth.current === authToken) setResult(data);
+      } catch (reason) { if (sequence === generation.current && auth.current === authToken) fail(reason); }
+      finally { if (sequence === generation.current && auth.current === authToken) { busyRef.current = false; setBusy(false); } }
+    }
+    return h("section", { className: "fleet-price-analysis", "aria-label": "Анализ адекватности цен" },
+      h("h3", null, "Анализ адекватности цен"),
+      h("p", { className: "fleet-note" }, "Сравнение сохранённого заказ-наряда с историей сопоставимых работ и запчастей. Если для задачи выбрана модель, она добавит пояснение; расход появится в отчёте нейросетей."),
+      !responsibilityScopeId && h("label", { className: "fleet-field" }, h("span", null, "Область автопарка"),
+        h("select", { "aria-label": "Область автопарка", value: scope, disabled: busy || !scopes.length, onChange: event => { setScope(event.target.value); setSearch(""); setSelected(""); setResult(null); } },
+          !scopes.length && h("option", { value: "" }, loading ? "Загрузка…" : "Нет доступных финансовых областей"),
+          ...scopes.map(item => h("option", { key: item.responsibilityScopeId, value: item.responsibilityScopeId }, `${item.projectName} · ${item.scopeName}`)))),
+      !orderId && h("div", { className: "fleet-detail-grid" },
+        h("label", { className: "fleet-field" }, h("span", null, "Найти заказ-наряд"),
+          h("input", { "aria-label": "Найти заказ-наряд", value: search, maxLength: 120, placeholder: "Номер или госномер", disabled: busy || !selectedScope,
+            onChange: event => { setSearch(event.target.value); setSelected(""); setResult(null); } })),
+        h("label", { className: "fleet-field" }, h("span", null, "Заказ-наряд"),
+          h("select", { "aria-label": "Заказ-наряд для анализа", value: selected, disabled: loading || busy || !orders.items.length,
+            onChange: event => { setSelected(event.target.value); setResult(null); } },
+            !orders.items.length && h("option", { value: "" }, loading ? "Загрузка…" : "Заказ-наряды не найдены"),
+            ...orders.items.map(item => h("option", { key: item.orderId, value: item.orderId }, `${item.orderNumber} · ${item.plate || "без госномера"} · ${money(item.amountCents)}`))))),
+      !orderId && orders.total > orders.items.length && h("p", { className: "fleet-note" }, `Показано ${orders.items.length} из ${number(orders.total)}. Уточните номер или госномер.`),
+      h("button", { type: "button", className: "button fleet-primary", onClick: analyze, disabled: busy || loading || !selectedScope || !selectedOrder }, busy ? "Анализируем цены…" : "Проверить адекватность цен"),
+      error && h("p", { className: "fleet-error", role: "alert" }, error),
+      result && h("div", { "aria-live": "polite" },
+        h("p", null, `Заказ-наряд ${result.orderNumber} · ${result.plate || "без госномера"}. Сопоставлено ${result.summary.comparedCount} из ${result.summary.lineCount} позиций; выше истории: ${result.summary.aboveCount}; ниже: ${result.summary.belowCount}.`),
+        h("p", { className: "fleet-warning" }, result.limitation),
+        h("details", null, h("summary", null, "Как рассчитано сравнение"), h("p", null, result.methodDescription)),
+        h("div", { style: { overflowX: "auto" } }, h("table", { className: "fleet-table" },
+          h("thead", null, h("tr", null, ...["Позиция", "За единицу с учётом скидок", "Медиана истории", "Отклонение", "Вывод и основание"].map(label => h("th", { key: label, scope: "col" }, label)))),
+          h("tbody", null, ...result.items.map(item => h("tr", { key: item.index },
+            h("td", null, item.name, h("small", { style: { display: "block" } }, `${number(item.quantity)} ${item.unit} · ${money(item.amountCents)}`)),
+            h("td", null, money(item.effectiveUnitPriceCents)), h("td", null, money(item.medianUnitPriceCents)),
+            h("td", null, item.deviationPercent == null ? "—" : `${item.deviationPercent > 0 ? "+" : ""}${number(item.deviationPercent)}%`),
+            h("td", null, h("strong", null, STATUS[item.status]),
+              h("p", null, item.reason || `${item.comparisonOrderCount} заказ-нарядов · диапазон ${money(item.minUnitPriceCents)}–${money(item.maxUnitPriceCents)}`),
+              item.evidence.length > 0 && h("details", null, h("summary", null, `Примеры из истории (${item.evidence.length})`),
+                h("ul", null, ...item.evidence.map(sample => h("li", { key: sample.orderId }, `${sample.orderNumber} · ${date(sample.completedOn)} · ${money(sample.effectiveUnitPriceCents)} / ${item.unit}${sample.supplier ? ` · ${sample.supplier}` : ""}`)))))))))),
+        result.aiWarning && h("p", { className: "fleet-warning", role: "status" }, result.aiWarning),
+        result.ai ? h("div", null, h("h4", null, "Комментарий модели"), h("p", { style: { whiteSpace: "pre-wrap" } }, result.ai.text),
+          h("p", { className: "fleet-note" }, `${result.ai.provider} · ${result.ai.model} · вход: ${result.ai.inputTokens == null ? "нет данных" : number(result.ai.inputTokens)} токенов · выход: ${result.ai.outputTokens == null ? "нет данных" : number(result.ai.outputTokens)} токенов · ${result.ai.cost == null ? "стоимость не рассчитана" : `${new Intl.NumberFormat("ru-RU", { maximumFractionDigits: 8 }).format(result.ai.cost)} ${result.ai.currency}`}`))
+          : !result.aiWarning && h("p", { className: "fleet-note" }, "Выполнено локальное сравнение, без расхода токенов. Для комментария выберите модель задачи «Анализ цен заказ-нарядов» в настройках нейросетей.")));
+  };
+}
+
 export function createFleetMaintenanceWorkspace(
   React,
   { request, authenticatedFetch, OperationsWorkspace },
 ) {
   const { createElement: h, useEffect, useRef, useState } = React;
+  const PriceAnalysis = createWorkOrderPriceAnalysis(React, { request });
   const button = (label, onClick, props = {}) =>
     h(
       "button",
@@ -620,7 +710,7 @@ export function createFleetMaintenanceWorkspace(
     );
   }
 
-  function PositionDialog({ row, close }) {
+  function PositionDialog({ row, close, token, onExpired, responsibilityScopeId }) {
     const labels = [
       ["Строка источника", row.sourceRow],
       ["Номер заказ-наряда", row.orderNumber],
@@ -671,6 +761,7 @@ export function createFleetMaintenanceWorkspace(
           { className: "fleet-warning" },
           `Проверки строки: ${row.issueCodes.join(", ")}`,
         ),
+      row.orderId && h(PriceAnalysis, { token, onExpired, responsibilityScopeId: row.responsibilityScopeId || responsibilityScopeId, orderId: String(row.orderId) }),
     );
   }
 
@@ -1916,16 +2007,6 @@ export function createFleetMaintenanceWorkspace(
             disabled: !scopeId || Boolean(busy) || dataLoading || operational,
           }),
           button(
-            busy === "pptx" ? "Формирование…" : "Презентация PPTX",
-            () => download("pptx"),
-            { disabled: !analytics || Boolean(busy) || operational },
-          ),
-          button(
-            busy === "csv" ? "Формирование…" : "Экспорт CSV",
-            () => download("csv"),
-            { disabled: !analytics || Boolean(busy) || operational },
-          ),
-          button(
             "Загрузить файл",
             () => {
               setImportOpen(true);
@@ -2041,6 +2122,7 @@ export function createFleetMaintenanceWorkspace(
                       importScopeIds: data?.activeDatasetScopeIds || [],
                       scope: currentScope,
                       canWrite,
+                      PriceAnalysis,
                     })
                   : h(
                       React.Fragment,
@@ -2431,6 +2513,9 @@ export function createFleetMaintenanceWorkspace(
       selectedRow &&
         h(PositionDialog, {
           row: selectedRow,
+          token,
+          onExpired,
+          responsibilityScopeId: scopeId,
           close: () => setSelectedRow(null),
         }),
     );

@@ -2427,6 +2427,58 @@ video.team-capture-preview {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
 }
+.team-dialog.team-fleet-report-dialog {
+  width: min(900px, calc(100vw - 32px));
+  max-width: 900px;
+}
+.team-fleet-report-controls {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.team-fleet-report-controls .team-field {
+  flex: 1 1 170px;
+}
+.team-fleet-report-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  max-height: 48vh;
+  overflow: auto;
+  padding: 16px;
+  margin: 0;
+  border: 1px solid var(--line, #dce2e9);
+  border-radius: 8px;
+  background: var(--canvas, #f6f8fb);
+}
+.team-fleet-managers {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.team-fleet-manager-table {
+  max-width: 100%;
+  overflow: auto;
+}
+.team-fleet-manager-table table {
+  width: 100%;
+  min-width: 420px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.team-fleet-manager-table th,
+.team-fleet-manager-table td {
+  padding: 9px;
+  text-align: left;
+  border-bottom: 1px solid var(--line, #dce2e9);
+  overflow-wrap: anywhere;
+}
+.team-fleet-manager-table th:first-child {
+  width: 40%;
+}
 .team-schedule-list {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

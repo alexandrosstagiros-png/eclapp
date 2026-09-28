@@ -90,7 +90,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     }
     const builder = await pageFor(manager);
     await builder.goto(`${fixture.origin}/?section=recruitment&recruitmentTab=onboarding`);
-    await builder.getByRole('navigation', { name: 'Разделы оформления' }).getByRole('button', { name: 'Конструктор форм', exact: true }).click();
+    await builder.getByRole('navigation', { name: 'Разделы оформления' }).getByRole('button', { name: 'Конструктор анкет', exact: true }).click();
     await builder.getByRole('button', { name: 'Создать форму', exact: true }).click();
     await builder.getByLabel('Название формы', { exact: true }).fill('Синтетическая форма самозанятого');
     await builder.getByLabel('Направление оформления', { exact: true }).fill('Тестовое направление');
@@ -116,7 +116,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await office.goto(`${fixture.origin}/?section=recruitment&recruitmentTab=onboarding`);
     const nav = office.getByRole('navigation', { name: 'Разделы оформления' });
     await nav.waitFor();
-    assert.equal(await nav.getByRole('button', { name: 'Конструктор форм', exact: true }).count(), 0, 'Recruiters cannot open the constructor');
+    await nav.getByRole('button', { name: 'Анкеты', exact: true }).click();
+    assert.equal(await nav.getByRole('button', { name: 'Конструктор анкет', exact: true }).count(), 0, 'Recruiters cannot open the constructor');
     await office.getByLabel('Направление', { exact: true }).selectOption('Оптиком');
     await office.getByLabel('Тип оформления', { exact: true }).selectOption('ip');
     await office.getByLabel('Форма оформления', { exact: true }).selectOption(template.id);

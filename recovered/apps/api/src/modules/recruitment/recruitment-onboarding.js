@@ -132,7 +132,7 @@ function createOnboardingComponents(RecruitmentService) {
         const selected=rows.slice(0,1000),photos=(await client.query(`SELECT ${PHOTO_COLUMNS} FROM recruitment_onboarding_photos WHERE session_id=ANY($1::uuid[]) ORDER BY uploaded_at,id`,[selected.map(row=>row.id)])).rows;
         const grouped=new Map();for(const photo of photos){if(!grouped.has(photo.sessionId))grouped.set(photo.sessionId,[]);grouped.get(photo.sessionId).push(photo);}
         const sessions=[];for(const row of selected)sessions.push(await this.serialize(client,row,grouped.get(row.id)||[]));
-        return {templates,sessions,canManageTemplates,ocr:ocr.getOcrStatus(),retentionHours:72,storageConfigured:!!this.directory,cleanup:this.cleanupStatus || {failed:!this.directory},truncated:rows.length>1000};
+        return {templates,sessions,canManageTemplates,canAccessContractTemplates:['manager','access_admin','recruiter'].includes(actor.role),ocr:ocr.getOcrStatus(),retentionHours:72,storageConfigured:!!this.directory,cleanup:this.cleanupStatus || {failed:!this.directory},truncated:rows.length>1000};
       });
     }
     async saveTemplate(supplied,body) {

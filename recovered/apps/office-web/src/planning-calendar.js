@@ -1,6 +1,6 @@
 import { dateRange, shiftPeriod, calendarLanes, cellRows, copyCalendarRange, copyCalendarDays, changeCalendarAssignment } from './planning-calendar-model.js';
 
-const STATUSES = [['work', 'В работе'], ['reserve', 'Резерв'], ['paid_reserve', 'Оплачиваемый резерв'], ['off', 'Выходной'], ['repair', 'Ремонт'], ['sick', 'Больничный'], ['transferred', 'Переброс'], ['cancelled', 'Отмена']];
+const STATUSES = [['work', 'В работе'], ['reserve', 'Резерв'], ['paid_reserve', 'Оплачиваемый резерв'], ['off', 'Выходной'], ['repair', 'Ремонт'], ['sick', 'Больничный'], ['transferred', 'Переброс'], ['cancelled', 'Отмена'], ['no_work', 'Нет работы'], ['no_driver', 'Без водителя'], ['crew_shortage', 'Неполный экипаж'], ['failed', 'Срыв']];
 const clone = value => JSON.parse(JSON.stringify(value));
 const bytes = value => new TextEncoder().encode(JSON.stringify(value)).length;
 function limitedHistory(snapshots) {

@@ -55,9 +55,9 @@ let SafeErrorFilter = class SafeErrorFilter {
             && detail.unavailablePhotoIds.every((id) => typeof id === "string" && /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id))
             ? { code: detail.code, message: detail.message, unavailablePhotoIds: detail.unavailablePhotoIds } : null;
         const pricingDetail = detail && typeof detail === "object" && "code" in detail && "message" in detail
-            && typeof detail.code === "string" && /^(PRICING|PAYROLL|RECRUITMENT|FLEET|TEAM|ONBOARDING_OCR)_[A-Z_]{1,80}$/.test(detail.code)
+            && typeof detail.code === "string" && /^(PRICING|PAYROLL|RECRUITMENT|FLEET|TEAM|NEURAL|ONBOARDING_OCR)_[A-Z_]{1,80}$/.test(detail.code)
             && typeof detail.message === "string" && detail.message.length <= 500
-            && !/[\u0000-\u001f\u007f]/.test(detail.message) && status >= 400 && (status < 500 || /^ONBOARDING_OCR_[A-Z_]{1,80}$/.test(detail.code))
+            && !/[\u0000-\u001f\u007f]/.test(detail.message) && status >= 400 && (status < 500 || /^(NEURAL|ONBOARDING_OCR)_[A-Z_]{1,80}$/.test(detail.code))
             ? { code: detail.code, message: detail.message } : null;
         response
             .status(status)

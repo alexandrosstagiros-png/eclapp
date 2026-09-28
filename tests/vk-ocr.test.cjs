@@ -62,7 +62,7 @@ test('VK passport request uses documented fixed endpoint, token query, matching 
     return response({labels:{first_name:[' ТЕСТ '],last_name:['СИНТЕТИЧЕСКИЙ'],birthday:['01.01.2000'],series_number:['00','00'],number:['000001'],place_of_issue:['ТЕСТОВЫЙ','ОТДЕЛ'],untrusted:['discard']}});
   }});
   assert.equal(calls,1);assert.equal(result.model,'vk-docs');
-  assert.deepEqual(result.fields,{name:'ТЕСТ',surname:'СИНТЕТИЧЕСКИЙ',birth_date:'01.01.2000',issued_by:'ТЕСТОВЫЙ ОТДЕЛ',series:'00 00',document_number:'000001',number:'00 00 000001'});
+  assert.deepEqual(result.fields,{name:'ТЕСТ',surname:'СИНТЕТИЧЕСКИЙ',birth_date:'01.01.2000',issued_by:'ТЕСТОВЫЙ ОТДЕЛ',series:'00 00',document_number:'000001',number:'00 00 000001',full_name:'СИНТЕТИЧЕСКИЙ ТЕСТ'});
   assert.match(result.text,/Фамилия: СИНТЕТИЧЕСКИЙ/);assert.doesNotMatch(result.text,/discard/);
 });
 

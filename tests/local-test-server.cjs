@@ -102,7 +102,8 @@ async function createTestServer({ staffTeamActors = false, telegramOnboarding = 
       let relative;
       if (!builtFrontend && url.pathname === "/assets/app.js") relative = "app.js";
       else if (!builtFrontend && /^\/assets\/planning(?:-model|-templates|-fields|-builder|-calendar|-calendar-model)?\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
-      else if (!builtFrontend && /^\/assets\/recruitment(?:-model|-onboarding)?\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
+      else if (!builtFrontend && /^\/assets\/recruitment(?:-model|-onboarding|-contracts|-contract-packs|-board-drag|-hh)?\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
+      else if (!builtFrontend && url.pathname === "/assets/neural.js") relative = "neural.js";
       else if (!builtFrontend && url.pathname === "/assets/tenders.js") relative = "tenders.js";
       else if (!builtFrontend && url.pathname === "/assets/birthdays.js") relative = "birthdays.js";
       else if (!builtFrontend && /^\/assets\/(?:company-work-request|attachment-photos|inspection-workflow|chief-mechanic-access|employee-planning-access)\.js$/.test(url.pathname)) relative = path.basename(url.pathname);
@@ -118,7 +119,7 @@ async function createTestServer({ staffTeamActors = false, telegramOnboarding = 
       try {
         let bytes = await fs.readFile(path.join(frontendRoot, relative));
         if (!builtFrontend && relative === "assets/app.css") bytes = Buffer.concat([bytes, Buffer.from('\n'), await fs.readFile(path.join(frontendRoot, 'assets/planning.css')), Buffer.from('\n'), await fs.readFile(path.join(frontendRoot, 'assets/planning-builder.css')), Buffer.from('\n'), await fs.readFile(path.join(frontendRoot, 'assets/planning-calendar.css')), Buffer.from('\n'), await fs.readFile(path.join(frontendRoot, 'assets/recruitment.css')), Buffer.from('\n'), await fs.readFile(path.join(frontendRoot, 'assets/tenders.css'))]);
-        if (!builtFrontend && relative === "assets/app.css") bytes = Buffer.concat([bytes,Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/fleet-maintenance.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/fleet-operations.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/team.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/driver-requests.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/team-tasks.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/team-outcomes.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/profile.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/birthdays.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/attachment-photos.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/inspection-workflow.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/employee-planning-access.css'))]);
+        if (!builtFrontend && relative === "assets/app.css") bytes = Buffer.concat([bytes,Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/fleet-maintenance.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/fleet-operations.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/team.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/driver-requests.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/team-tasks.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/team-outcomes.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/profile.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/birthdays.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/attachment-photos.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/inspection-workflow.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/employee-planning-access.css')),Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/neural.css'))]);
         if (!builtFrontend && relative === "assets/app.css") bytes = Buffer.concat([bytes,Buffer.from('\n'),await fs.readFile(path.join(frontendRoot,'assets/recruitment-onboarding.css'))]);
         const types = { ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".html": "text/html; charset=utf-8", ".svg": "image/svg+xml" };
         outgoing.writeHead(200, { "Content-Type": types[path.extname(relative)] ?? "application/octet-stream", "Cache-Control": "no-store" });
@@ -145,7 +146,9 @@ async function createTestServer({ staffTeamActors = false, telegramOnboarding = 
     delete process.env.YANDEX_OCR_API_KEY;
     delete process.env.YANDEX_OCR_FOLDER_ID;
     delete process.env.VK_OCR_TOKEN;
+    delete process.env.DADATA_API_KEY;
     delete process.env.ONBOARDING_OCR_PROVIDER;
+    for (const key of ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY', 'DASHSCOPE_API_KEY', 'ZHIPU_API_KEY', 'YANDEX_API_KEY', 'YANDEX_FOLDER_ID', 'DASHSCOPE_WORKSPACE_ID']) delete process.env[key];
     if (telegramOnboarding) Object.assign(process.env, {
       TELEGRAM_ONBOARDING_ENABLED: "true",
       TELEGRAM_BOT_USERNAME: "synthetic_ecl_bot",
