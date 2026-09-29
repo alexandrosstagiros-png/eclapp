@@ -255,11 +255,6 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await nav
       .getByRole('button', { name: 'Платёжный календарь', exact: true })
       .click();
-    if (process.env.FINANCE_BROWSER_DEBUG) {
-      await page.getByRole('heading', { name: 'Платёжный календарь', exact: true }).waitFor();
-      console.log('CALENDAR DEBUG', JSON.stringify((await api('GET', '')).calendar));
-      console.log('CALENDAR UI', await page.locator('.fl-workspace').innerText());
-    }
     const paymentDate = page
       .getByLabel('Дата платежа: Выполненная перевозка', { exact: true })
       .first();

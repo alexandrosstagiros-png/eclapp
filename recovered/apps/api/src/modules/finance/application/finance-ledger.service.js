@@ -17,6 +17,7 @@ const {
 const { AuditService } = require('../../audit/application/audit.service');
 const { NeuralService } = require('../../neural/neural.service');
 const { isCalendarDate } = require('../domain/finance-rules');
+const { financialToday } = require('../domain/finance-ledger');
 
 const ROLES = [
   'access_admin',
@@ -522,7 +523,7 @@ class FinanceLedgerService {
     };
   }
   filters(query, scopes) {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = financialToday();
     const from = query.from
       ? date(query.from, 'начало периода')
       : `${today.slice(0, 7)}-01`;
@@ -561,7 +562,7 @@ class FinanceLedgerService {
           reports[key] = reports[key].filter(
             (row) => row.counterpartyId === filters.counterpartyId,
           );
-      const today = new Date().toISOString().slice(0, 10);
+      const today = financialToday();
       const calendarFrom = query.calendarFrom
         ? date(query.calendarFrom)
         : today;
@@ -2976,7 +2977,7 @@ class FinanceLedgerService {
           selected = scopes.filter((scope) => scope.legalEntityId === entityId);
         const state = await this.state(client, selected),
           from = body.from ? date(body.from) : '2000-01-01',
-          to = body.to ? date(body.to) : new Date().toISOString().slice(0, 10);
+          to = body.to ? date(body.to) : financialToday();
         const rows = [],
           grantJSON = JSON.stringify(selected);
         const partyFor = (system, id) => {

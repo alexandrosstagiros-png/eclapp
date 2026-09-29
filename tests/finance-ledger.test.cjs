@@ -50,6 +50,66 @@ test('money never rounds binary floats and large decimal inputs stay exact', () 
     /AMOUNT_OVERFLOW/,
   );
 });
+test('financial defaults include Moscow business-day payments before the UTC date changes', () => {
+  assert.equal(
+    ledger.financialToday(new Date('2026-09-29T20:59:59Z')),
+    '2026-09-29',
+  );
+  assert.equal(
+    ledger.financialToday(new Date('2026-09-29T21:00:00Z')),
+    '2026-09-30',
+  );
+  assert.equal(
+    ledger.financialToday(new Date('2026-12-31T21:00:00Z')),
+    '2027-01-01',
+  );
+  const RealDate = global.Date;
+  const instant = '2026-09-29T21:15:00Z';
+  global.Date = class extends RealDate {
+    constructor(...args) {
+      super(...(args.length ? args : [instant]));
+    }
+    static now() {
+      return new RealDate(instant).getTime();
+    }
+  };
+  try {
+    const { state, post } = fixture();
+    const sale = post({
+      kind: 'sale',
+      date: '2026-09-30',
+      amount: '100',
+      counterpartyId: 'client',
+      dueDate: '2026-09-30',
+    });
+    post({
+      kind: 'payment_in',
+      date: '2026-09-30',
+      amount: '40',
+      counterpartyId: 'client',
+      cashAccountId: 'bank',
+      allocations: [{ documentId: sale.id, amount: '40' }],
+    });
+    const calendar = ledger.buildCalendar(state);
+    assert.equal(calendar.from, '2026-09-30');
+    assert.equal(calendar.asOf, '2026-09-30');
+    assert.equal(calendar.openingKopecks, 4000);
+    assert.equal(
+      calendar.rows.find((row) => row.documentId === sale.id).amountKopecks,
+      6000,
+    );
+    const reports = ledger.buildReports(state);
+    assert.equal(reports.to, '2026-09-30');
+    assert.equal(reports.cf.netKopecks, 4000);
+    assert.equal(
+      ledger.buildCalendar(state, { from: '2026-09-29', asOf: '2026-09-29' })
+        .openingKopecks,
+      0,
+    );
+  } finally {
+    global.Date = RealDate;
+  }
+});
 test('unpaid service, carrier cost and partial receipt agree across all reports', () => {
   const { post, report, state } = fixture();
   const sale = post({

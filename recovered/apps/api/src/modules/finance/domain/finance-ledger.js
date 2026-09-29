@@ -6,6 +6,20 @@ const { randomUUID } = require('node:crypto');
 const { validateArticle, resolveArticle } = require('./finance-articles');
 const COMMON = '__common__';
 const UNASSIGNED = '__unassigned__';
+const financialDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Europe/Moscow',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+function financialToday(now = new Date()) {
+  const parts = Object.fromEntries(
+    financialDateFormatter
+      .formatToParts(now)
+      .map(({ type, value }) => [type, value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
 const MAX = BigInt(Number.MAX_SAFE_INTEGER);
 const ACCOUNTS = Object.freeze({
   cash: { label: 'Деньги', section: 'assets' },
@@ -1477,7 +1491,7 @@ function internalKey(legalEntityId, intercompany) {
 }
 function buildReports(state = {}, filters = {}) {
   const from = date(filters.from || '1900-01-01');
-  const to = date(filters.to || new Date().toISOString().slice(0, 10));
+  const to = date(filters.to || financialToday());
   if (from > to) fail('INVALID_PERIOD');
   const all = selectedOperations(state, filters);
   const ops = all.filter((o) => o.date <= to);
@@ -2064,7 +2078,7 @@ function buildReports(state = {}, filters = {}) {
   };
 }
 function buildCalendar(state = {}, filters = {}) {
-  const from = date(filters.from || new Date().toISOString().slice(0, 10));
+  const from = date(filters.from || financialToday());
   const to = date(
     filters.to ||
       new Date(Date.parse(`${from}T00:00:00Z`) + 90 * 86400000)
@@ -2075,7 +2089,7 @@ function buildCalendar(state = {}, filters = {}) {
     fail('INVALID_CALENDAR_PERIOD');
   // Calendar is an as-of forecast: past/future obligations are computed using
   // facts through asOf (today by default), independently of displayed window.
-  const asOf = date(filters.asOf || new Date().toISOString().slice(0, 10));
+  const asOf = date(filters.asOf || financialToday());
   const ops = selectedOperations(state, filters).filter((o) => o.date <= asOf);
   const reversedIds = new Set(
     ops.map((o) => o.reversesId || o.originalOperationId).filter(Boolean),
@@ -2274,6 +2288,7 @@ module.exports = {
   OPERATION_KINDS,
   COMMON,
   UNASSIGNED,
+  financialToday,
   toKopecks,
   formatMoney,
   allocateAmount,
