@@ -103,6 +103,17 @@ test('recurring calendar clamps last day and past accrual creates exactly one mo
   assert.equal(rows.length, 1);
   assert.equal(rows[0].operation.date, '2026-02-28');
   assert.equal(rows[0].operation.source.id, 'rent:2026-02');
+  assert.equal(rows[0].operation.directionId, '__unassigned__');
+  assert.equal(r.state.catalogs[1].directionId, '__unassigned__');
+  const explicitCommon = {
+    catalogs: [{ ...plan, directionId: '__common__' }],
+    operations: [],
+  };
+  assert.equal(
+    recurringPreviewRows(explicitCommon, '2026-02-01', '2026-03-15')[0]
+      .operation.directionId,
+    '__common__',
+  );
   state.operations.push({
     id: 'expense',
     source: { system: 'recurring', id: 'rent:2026-02', version: '1' },

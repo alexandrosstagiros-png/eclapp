@@ -85,7 +85,15 @@ test(
           ),
           403,
         );
-        const context = ok(await snapshot()).context;
+        const initial = ok(await snapshot());
+        const context = initial.context;
+        assert.deepEqual(
+          initial.catalogs.directions
+            .filter((row) => row.system)
+            .map((row) => row.id),
+          ['__common__', '__unassigned__'],
+        );
+        assert.ok(initial.catalogs.directions.every((row) => !row.canEdit));
         assert.equal(context.permissions.canClose, true);
         assert.equal(context.scopes.length, 1);
       },
@@ -218,6 +226,9 @@ test(
         );
         const perDirection = ok(await snapshot(`&directionId=${direction.id}`));
         assert.equal(perDirection.reports.balance.differenceKopecks, 0);
+        const common = ok(await snapshot('&directionId=__common__'));
+        assert.equal(common.reports.balance.differenceKopecks, 0);
+        assert.equal(common.reports.pnl.profitKopecks, 0);
         const detail = ok(
           await request(
             'GET',
@@ -972,6 +983,45 @@ test(
             statementDate: '2026-09-30',
             statementBalanceKopecks: 122000,
           }),
+        );
+        assert.deepEqual(ok(await snapshot()).controls, []);
+        const unassigned = ok(
+          await post({
+            kind: 'expense',
+            date: '2026-09-25',
+            counterpartyId: carrier.id,
+            amountKopecks: 10,
+          }),
+          201,
+        );
+        assert.equal(unassigned.directionId, '__unassigned__');
+        const unassignedView = ok(
+          await snapshot('&directionId=__unassigned__'),
+        );
+        assert.equal(unassignedView.reports.pnl.profitKopecks, -10);
+        assert.ok(
+          unassignedView.controls.some(
+            (row) => row.code === 'UNASSIGNED_DIRECTION',
+          ),
+        );
+        const blocked = ok(
+          await request('POST', `${base}/periods/close`, close, token),
+          409,
+        );
+        assert.match(JSON.stringify(blocked), /направления/);
+        ok(
+          await request(
+            'POST',
+            `${base}/operations/${unassigned.id}/reverse`,
+            {
+              legalEntityId: ids.legal,
+              reason: 'Отмена тестового расхода',
+              date: '2026-09-25',
+              idempotencyKey: randomUUID(),
+            },
+            token,
+          ),
+          201,
         );
         assert.deepEqual(ok(await snapshot()).controls, []);
         const closed = ok(

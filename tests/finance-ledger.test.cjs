@@ -1108,3 +1108,59 @@ test('document corrections change accrual and residual without changing identity
   assert.equal(debt.settledKopecks, 4000);
   assert.equal(report().balance.differenceKopecks, 0);
 });
+test('missing business direction stays unresolved while explicit common overhead remains valid', () => {
+  const { post, state, report } = fixture();
+  const sale = post({
+    kind: 'sale',
+    amount: '100',
+    counterpartyId: 'client',
+    directionId: undefined,
+  });
+  const expense = post({
+    kind: 'expense',
+    amount: '100',
+    counterpartyId: 'supplier',
+    directionId: undefined,
+  });
+  const common = post({
+    kind: 'expense',
+    amount: '20',
+    counterpartyId: 'landlord',
+    directionId: ledger.COMMON,
+  });
+  const capital = post({
+    kind: 'capital_in',
+    amount: '50',
+    cashAccountId: 'bank',
+    directionId: undefined,
+  });
+  state.confirmedDocumentIds = [sale.id, expense.id, common.id];
+  assert.equal(sale.directionId, ledger.UNASSIGNED);
+  assert.equal(expense.directionId, ledger.UNASSIGNED);
+  assert.equal(common.directionId, ledger.COMMON);
+  assert.equal(capital.directionId, ledger.COMMON);
+  const control = report().controls.find(
+    (c) => c.code === 'UNASSIGNED_DIRECTION',
+  );
+  assert.equal(control.blocking, true);
+  assert.equal(control.grossAmountKopecks, 20000);
+  assert.equal(control.amountKopecks, 20000);
+  assert.equal(control.netAmountKopecks, 0);
+  assert.equal(control.postingCount, 2);
+  assert.ok(
+    !report({ directionId: ledger.COMMON }).controls.some(
+      (c) => c.code === 'UNASSIGNED_DIRECTION',
+    ),
+  );
+  post({
+    kind: 'reversal',
+    originalOperationId: sale.id,
+    reason: 'Исправление направления',
+  });
+  post({
+    kind: 'reversal',
+    originalOperationId: expense.id,
+    reason: 'Исправление направления',
+  });
+  assert.ok(!report().controls.some((c) => c.code === 'UNASSIGNED_DIRECTION'));
+});

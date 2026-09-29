@@ -2283,7 +2283,9 @@ export function createFinanceLedgerWorkspace(
       plans: 'Регулярные платежи',
     };
     const items = list(data.catalogs?.[kind]).filter(
-        (item) => kind !== 'plans' || item.recurrence,
+        (item) =>
+          (kind !== 'plans' || item.recurrence) &&
+          (kind !== 'directions' || !item.system),
       ),
       entities = list(data.context?.legalEntities);
     const canEdit = data.context?.permissions?.canEdit;
@@ -2705,7 +2707,9 @@ export function createFinanceLedgerWorkspace(
                   'Направление правила',
                   draft.directionId,
                   update('directionId'),
-                  list(data.catalogs?.directions),
+                  list(data.catalogs?.directions).filter(
+                    (item) => draft.ruleType !== 'fuel' || !item.system,
+                  ),
                   'Выберите направление',
                   { required: draft.ruleType === 'fuel', disabled: busy },
                 ),
@@ -2923,7 +2927,7 @@ export function createFinanceLedgerWorkspace(
                   draft.directionId,
                   update('directionId'),
                   list(data.catalogs?.directions),
-                  'Общие расходы',
+                  'Не назначено',
                   { disabled: busy },
                 ),
                 select(
@@ -2983,7 +2987,7 @@ export function createFinanceLedgerWorkspace(
                   { required: true, disabled: busy },
                 ),
                 ...list(data.catalogs?.directions)
-                  .filter((item) => !item.archived)
+                  .filter((item) => !item.archived && !item.system)
                   .map((item) =>
                     text(
                       `Доля: ${itemName(item)}, %`,
@@ -3614,7 +3618,9 @@ export function createFinanceLedgerWorkspace(
                       null,
                       select(
                         `Направление строки ${key}`,
-                        values.directionId || operation.directionId,
+                        values.directionId !== undefined
+                          ? values.directionId
+                          : operation.directionId,
                         (value) => override(key, 'directionId', value),
                         list(data.catalogs?.directions),
                         'Не определено',
@@ -3907,7 +3913,7 @@ export function createFinanceLedgerWorkspace(
           draft.directionId,
           update('directionId'),
           list(data.catalogs?.directions),
-          'Не определено',
+          'Не назначено',
           { disabled: busy },
         ),
         select(

@@ -710,6 +710,24 @@ class FinanceLedgerService {
               ),
             plannedDate: row.expectedDate ?? null,
           });
+      // These are existing ledger buckets, not editable catalog records.
+      for (const [id, name] of [
+        ['__common__', 'Общая часть / казначейство'],
+        ['__unassigned__', 'Не распределено'],
+      ])
+        catalogs.directions.push({
+          id,
+          name,
+          kind: 'directions',
+          system: true,
+          canEdit: false,
+          legalEntityIds: filters.legalEntityIds,
+          responsibilityScopeIds: scopes
+            .filter((scope) =>
+              filters.legalEntityIds.includes(scope.legalEntityId),
+            )
+            .map((scope) => scope.responsibilityScopeId),
+        });
       catalogs.reconciliations = catalogs.reconciliations.map((row) =>
         require('../domain/finance-reconciliation').assessReconciliation(
           row,
@@ -1706,6 +1724,7 @@ class FinanceLedgerService {
       const controls = reports.controls || [];
       const blockingCodes = [
         'UNCLASSIFIED_CASH',
+        'UNASSIGNED_DIRECTION',
         'PROVISIONAL_ACCRUALS',
         'INTERCOMPANY_UNMATCHED',
         'INTERCOMPANY_MISMATCH',

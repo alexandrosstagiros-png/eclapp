@@ -263,7 +263,7 @@ function recurringState(state, to) {
         recurrenceTemplateId: plan.id,
         recurringSourceId: period.sourceId,
         documentId: document?.id,
-        directionId: plan.directionId || '__common__',
+        directionId: plan.directionId || '__unassigned__',
       };
       output.catalogs.push(virtual);
       if (
@@ -303,7 +303,7 @@ function recurringPreviewRows(state, from, to) {
           plan.responsibilityScopeIds?.length === 1
             ? plan.responsibilityScopeIds[0]
             : undefined,
-        directionId: plan.directionId || '__common__',
+        directionId: plan.directionId || '__unassigned__',
         allocationRuleId: plan.allocationRuleId,
         description: `${plan.name} · ${period.month}`,
         article: plan.accrual.article,

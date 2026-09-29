@@ -4,6 +4,7 @@
 // Business operations, never report cells, are the accounting source of truth.
 const { randomUUID } = require('node:crypto');
 const COMMON = '__common__';
+const UNASSIGNED = '__unassigned__';
 const MAX = BigInt(Number.MAX_SAFE_INTEGER);
 const ACCOUNTS = Object.freeze({
   cash: { label: 'Деньги', section: 'assets' },
@@ -518,7 +519,17 @@ function buildOperation(raw, context = {}) {
     version: 1,
     kind,
     date: date(raw.date),
-    directionId: raw.directionId || COMMON,
+    directionId:
+      raw.directionId ||
+      ([
+        'sale',
+        'expense',
+        'fuel_sale',
+        'fuel_own_consumption',
+        'inventory_consumption',
+      ].includes(kind)
+        ? UNASSIGNED
+        : COMMON),
     status: raw.status || 'confirmed',
     dueDate: date(raw.dueDate, true),
     expectedDate: date(raw.expectedDate || raw.plannedDate, true),
@@ -1789,6 +1800,30 @@ function buildReports(state = {}, filters = {}) {
       'Есть неразобранные денежные операции',
       suspense,
     );
+  const unassigned = ops
+    .filter((o) => o.kind !== 'reversal' && !reversedIds.has(o.id))
+    .flatMap((o) => o.postings || [])
+    .filter(
+      (p) =>
+        select(p) &&
+        p.directionId === UNASSIGNED &&
+        ['revenue', 'expense'].includes(p.account),
+    );
+  if (unassigned.length) {
+    const grossAmountKopecks = sum(
+      unassigned.map((p) => Math.abs(p.amountKopecks)),
+    );
+    controls.push({
+      code: 'UNASSIGNED_DIRECTION',
+      severity: 'error',
+      blocking: true,
+      message: 'Есть доходы или расходы без назначенного направления',
+      amountKopecks: grossAmountKopecks,
+      grossAmountKopecks,
+      netAmountKopecks: sum(unassigned.map((p) => -p.amountKopecks)),
+      postingCount: unassigned.length,
+    });
+  }
   const cutover =
     state.cutoverDate ||
     catalogs(state).find((c) => c.kind === 'settings')?.cutoverDate;
@@ -2106,6 +2141,7 @@ module.exports = {
   ACCOUNTS,
   OPERATION_KINDS,
   COMMON,
+  UNASSIGNED,
   toKopecks,
   formatMoney,
   allocateAmount,
