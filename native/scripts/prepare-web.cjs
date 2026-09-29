@@ -6,7 +6,7 @@ const nativeRoot = path.resolve(__dirname, '..');
 const source = path.resolve(nativeRoot, '../recovered/apps/office-web/src');
 const output = path.join(nativeRoot, 'dist');
 const { minify } = require(path.resolve(nativeRoot, '../recovered/node_modules/terser'));
-const cssFiles = ['app', 'planning', 'planning-builder', 'planning-calendar', 'recruitment', 'recruitment-onboarding', 'tenders', 'fleet-maintenance', 'fleet-operations', 'development', 'team', 'driver-requests', 'team-tasks', 'team-outcomes', 'profile', 'birthdays', 'attachment-photos', 'inspection-workflow', 'employee-planning-access', 'neural'];
+const cssFiles = ['app', 'planning', 'planning-builder', 'planning-calendar', 'recruitment', 'recruitment-onboarding', 'tenders', 'fleet-maintenance', 'fleet-operations', 'development', 'team', 'driver-requests', 'team-tasks', 'team-outcomes', 'profile', 'birthdays', 'attachment-photos', 'inspection-workflow', 'employee-planning-access', 'neural', 'finance-ledger'];
 const hash = data => crypto.createHash('sha256').update(data).digest('hex');
 
 async function build() {
