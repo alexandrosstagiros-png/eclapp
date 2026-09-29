@@ -19,10 +19,13 @@ const payroll_repository_1 = require("./infra/payroll.repository");
 const payroll_controller_1 = require("./interface/payroll.controller");
 const deposit_service_1 = require("./application/deposit.service");
 const deposit_controller_1 = require("./interface/deposit.controller");
+const { FinanceLedgerService } = require('./application/finance-ledger.service');
+const { FinanceLedgerController } = require('./interface/finance-ledger.controller');
+const { NeuralModule } = require('../neural/neural.module');
 let FinanceModule = class FinanceModule {
 };
 exports.FinanceModule = FinanceModule;
 exports.FinanceModule = FinanceModule = __decorate([
-    (0, common_1.Module)({ imports: [identity_access_module_1.IdentityAccessModule], controllers: [finance_controller_1.FinanceController, pricing_controller_1.PricingController, payroll_controller_1.PayrollController, deposit_controller_1.DepositController, deposit_controller_1.DriverDepositController], providers: [finance_service_1.FinanceService, pricing_service_1.PricingService, one_c_worker_service_1.OneCWorkerService, payroll_service_1.PayrollService, payroll_repository_1.PayrollRepository, deposit_service_1.DepositService] })
+    (0, common_1.Module)({ imports: [identity_access_module_1.IdentityAccessModule, NeuralModule], controllers: [finance_controller_1.FinanceController, pricing_controller_1.PricingController, payroll_controller_1.PayrollController, deposit_controller_1.DepositController, deposit_controller_1.DriverDepositController, FinanceLedgerController], providers: [finance_service_1.FinanceService, pricing_service_1.PricingService, one_c_worker_service_1.OneCWorkerService, payroll_service_1.PayrollService, payroll_repository_1.PayrollRepository, deposit_service_1.DepositService, FinanceLedgerService] })
 ], FinanceModule);
 //# sourceMappingURL=finance.module.js.map

@@ -1,0 +1,528 @@
+.fl-workspace {
+  padding: 26px;
+  max-width: 1760px;
+  margin: 0 auto;
+  display: grid;
+  gap: 18px;
+  color: var(--text);
+  min-width: 0;
+}
+.fl-workspace *,
+.fl-modal * {
+  box-sizing: border-box;
+}
+.fl-workspace :is(h1, h2, h3, p),
+.fl-modal :is(h2, h3, p) {
+  margin: 0;
+}
+.fl-workspace h1 {
+  font-size: 30px;
+  letter-spacing: -0.035em;
+  margin: 5px 0;
+}
+.fl-workspace h2,
+.fl-modal h2 {
+  font-size: 20px;
+}
+.fl-workspace h3,
+.fl-modal h3 {
+  font-size: 15px;
+}
+.fl-workspace .muted,
+.fl-modal .muted,
+.fl-note {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-secondary, var(--muted));
+}
+.fl-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.fl-toolbar,
+.fl-row-actions,
+.fl-subtabs,
+.fl-tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.fl-workspace .button,
+.fl-modal .button {
+  min-height: 36px;
+  padding: 8px 12px;
+  font-size: 12px;
+  white-space: normal;
+}
+.fl-tabs button,
+.fl-subtabs button {
+  border-radius: 8px;
+}
+.fl-tabs button[aria-pressed='true'],
+.fl-subtabs button[aria-pressed='true'] {
+  background: var(--blue-soft);
+  border-color: var(--blue);
+  color: var(--blue);
+  font-weight: 700;
+}
+.fl-filters {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(130px, 160px)) repeat(
+      3,
+      minmax(150px, 1fr)
+    );
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.fl-field {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary, var(--muted));
+  min-width: 0;
+}
+.fl-field > span {
+  font-weight: 600;
+}
+.fl-field small {
+  font-size: 11px;
+  font-weight: 400;
+}
+.fl-workspace :is(input, select, textarea),
+.fl-modal :is(input, select, textarea) {
+  font: inherit;
+  color: var(--text);
+  background: var(--field-bg, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  min-height: 36px;
+  padding: 7px 9px;
+  max-width: 100%;
+  min-width: 0;
+}
+.fl-workspace input[type='checkbox'],
+.fl-modal input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  accent-color: var(--blue);
+  margin: 0;
+  flex: none;
+}
+.fl-card {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  min-width: 0;
+}
+.fl-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 12px;
+}
+.fl-metric {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  background: var(--canvas, var(--surface));
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+.fl-metric span {
+  font-size: 12px;
+  color: var(--text-secondary, var(--muted));
+}
+.fl-metric strong {
+  font-size: 22px;
+  line-height: 1.3;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums;
+}
+.fl-table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.fl-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.fl-table th {
+  position: sticky;
+  top: 0;
+  background: var(--canvas, var(--surface));
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-secondary, var(--muted));
+  white-space: nowrap;
+}
+.fl-table :is(th, td) {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+.fl-table tr:last-child td {
+  border-bottom: 0;
+}
+.fl-table td {
+  min-width: 110px;
+}
+.fl-table td:first-child:has(input[type='checkbox']) {
+  min-width: 35px;
+  width: 35px;
+}
+.fl-table td input:not([type='checkbox']),
+.fl-table td select {
+  width: 160px;
+  min-height: 32px;
+  font-size: 12px;
+}
+.fl-table td small {
+  display: block;
+  color: var(--text-secondary, var(--muted));
+  margin-top: 5px;
+}
+.fl-table td strong {
+  display: block;
+  font-weight: 600;
+}
+.fl-table .fl-field > span {
+  position: absolute;
+  overflow: hidden;
+  width: 1px;
+  height: 1px;
+  clip: rect(0, 0, 0, 0);
+}
+.fl-money {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fl-link {
+  display: block;
+  text-align: left;
+  border: 0;
+  background: none;
+  color: var(--blue);
+  font: inherit;
+  cursor: pointer;
+  padding: 4px 0;
+  max-width: 360px;
+}
+.fl-link:disabled {
+  opacity: 0.55;
+}
+.fl-link:hover {
+  text-decoration: underline;
+}
+.fl-badge {
+  display: inline-block;
+  padding: 4px 7px;
+  border-radius: 5px;
+  font-size: 11px;
+  background: var(--canvas);
+  color: var(--text-secondary, var(--muted));
+  white-space: nowrap;
+}
+.fl-badge-confirmed,
+.fl-badge-posted,
+.fl-badge-paid {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.fl-badge-error,
+.fl-badge-overdue {
+  background: var(--danger-bg);
+  color: var(--danger-text);
+}
+.fl-row-void {
+  opacity: 0.6;
+}
+.fl-empty {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--text-secondary, var(--muted));
+  font-size: 14px;
+  line-height: 1.5;
+}
+.fl-quality {
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.fl-quality summary {
+  font-weight: 600;
+  cursor: pointer;
+}
+.fl-quality ul {
+  margin: 10px 0;
+  padding-left: 20px;
+}
+.fl-source-statuses {
+  display: flex;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+.fl-source-statuses > div {
+  display: grid;
+  gap: 3px;
+}
+.fl-error {
+  color: var(--danger-text, #b42318);
+}
+.fl-alert {
+  padding: 14px;
+  border: 1px solid var(--danger-border, #fda29b);
+  border-radius: 8px;
+  background: var(--danger-bg);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.fl-notice {
+  font-size: 13px;
+  color: var(--blue);
+}
+.fl-bulk {
+  padding: 12px;
+  background: var(--canvas);
+  border-radius: 8px;
+  align-items: end;
+}
+.fl-check {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.fl-bulk > .fl-check {
+  align-self: center;
+}
+.fl-pagination {
+  font-size: 12px;
+}
+.fl-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+  max-height: 420px;
+  overflow: auto;
+}
+.fl-day {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 13px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.fl-day > span {
+  color: var(--text-secondary, var(--muted));
+  font-size: 11px;
+}
+.fl-day.fl-deficit {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+}
+.fl-deficit b,
+.fl-deficit small {
+  color: var(--danger-text);
+}
+.fl-calendar-list {
+  display: grid;
+  gap: 10px;
+}
+.fl-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  background: rgba(8, 16, 28, 0.48);
+  padding: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.fl-modal {
+  width: min(1120px, 100%);
+  max-height: calc(100dvh - 60px);
+  overflow: auto;
+  display: grid;
+  gap: 20px;
+  background: var(--surface, #fff);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  padding: 24px;
+  outline: none;
+}
+.fl-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+.fl-modal form {
+  display: grid;
+  gap: 14px;
+}
+.fl-source {
+  display: grid;
+  gap: 16px;
+}
+.fl-source dl {
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr);
+  font-size: 13px;
+  gap: 10px;
+  margin: 0;
+}
+.fl-source dt {
+  color: var(--text-secondary, var(--muted));
+}
+.fl-source dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.fl-role-options {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  grid-column: span 2;
+  padding: 12px;
+}
+.fl-role-options legend {
+  font-size: 12px;
+}
+.fl-catalog-form {
+  padding: 18px;
+  background: var(--canvas);
+  border-radius: 10px;
+}
+.fl-import-preview {
+  display: grid;
+  gap: 16px;
+  margin-top: 20px;
+}
+.fl-legacy-back {
+  padding: 20px 26px 0;
+}
+.fl-workspace button:focus-visible,
+.fl-modal button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+@media (max-width: 1100px) {
+  .fl-filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .fl-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 650px) {
+  .fl-workspace {
+    padding: 14px;
+    gap: 14px;
+  }
+  .fl-heading {
+    align-items: flex-start;
+  }
+  .fl-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    padding: 12px;
+    gap: 10px;
+  }
+  .fl-filters > .fl-field:last-child {
+    grid-column: span 2;
+  }
+  .fl-card {
+    padding: 13px;
+  }
+  .fl-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .fl-metric {
+    padding: 12px;
+  }
+  .fl-metric strong {
+    font-size: 17px;
+  }
+  .fl-tabs {
+    gap: 5px;
+  }
+  .fl-modal-backdrop {
+    padding: 8px;
+  }
+  .fl-modal {
+    padding: 16px;
+    max-height: calc(100dvh - 16px);
+  }
+  .fl-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .fl-role-options {
+    grid-column: auto;
+  }
+  .fl-source dl {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .fl-source dd {
+    margin-bottom: 8px;
+  }
+  .fl-bulk {
+    align-items: stretch;
+  }
+  .fl-bulk > .fl-field {
+    width: 100%;
+  }
+  .fl-table {
+    font-size: 11px;
+  }
+  .fl-table :is(th, td) {
+    padding: 9px;
+  }
+  .fl-workspace h1 {
+    font-size: 26px;
+  }
+}
+
+@media (max-width: 650px) {
+  .fl-table:is(
+      [aria-label='Баланс · Balance'],
+      [aria-label='Прибыли и убытки · PnL']
+    )
+    td {
+    min-width: 0;
+  }
+  .fl-table:is(
+      [aria-label='Баланс · Balance'],
+      [aria-label='Прибыли и убытки · PnL']
+    )
+    .fl-money {
+    min-width: 66px;
+  }
+}

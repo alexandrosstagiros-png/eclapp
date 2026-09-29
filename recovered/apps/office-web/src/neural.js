@@ -1,4 +1,4 @@
-const TASKS = { conversation_summary: 'Сводка сообщений', work_order_prices: 'Анализ цен заказ-нарядов' };
+const TASKS = { conversation_summary: 'Сводка сообщений', work_order_prices: 'Анализ цен заказ-нарядов', finance_classification: 'Предложения финансовой разноски' };
 const PROVIDERS = { openai: 'OpenAI', anthropic: 'Anthropic', qwen: 'Qwen', glm: 'GLM', yandex: 'Яндекс' };
 const number = value => new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 }).format(Number(value) || 0);
 const tokenLabel = value => value == null ? 'нет данных' : number(value);
