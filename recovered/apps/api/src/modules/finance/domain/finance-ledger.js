@@ -122,6 +122,12 @@ const ERRORS = {
   ALLOCATION_NOT_100: 'Сумма долей распределения должна составлять 100%.',
   ALLOCATION_RULE_UNAVAILABLE:
     'Правило распределения недоступно на дату операции.',
+  ALLOCATION_CONFLICT:
+    'Выберите разовые доли или сохраненное правило распределения.',
+  ALLOCATION_KIND_UNSUPPORTED:
+    'Распределение доступно для расходов и исходящих платежей без привязки к документам.',
+  ALLOCATION_LINKED_DOCUMENTS:
+    'Платеж уже связан с документами. Распределите связанные начисления: направления прямой оплаты обновятся вместе с ними.',
   CORRECTION_REASON_REQUIRED: 'Укажите основание корректировки.',
   SETOFF_BASIS_REQUIRED: 'Укажите основание взаимозачета.',
   ORIGINAL_NOT_REVERSIBLE: 'Операция недоступна для отмены или уже отменена.',
@@ -570,6 +576,9 @@ function buildOperation(raw, context = {}) {
     allocations: [],
     cashFlows: [],
   };
+  delete op.allocationRule;
+  delete op.allocationMethod;
+  delete op.allocationWeights;
   if (!['confirmed', 'provisional'].includes(op.status)) fail('INVALID_STATUS');
   if (
     raw.cashFlowCategory &&
@@ -821,8 +830,9 @@ function buildOperation(raw, context = {}) {
         const part =
           index === shares.length - 1
             ? left
-            : safe((BigInt(n) * BigInt(value)) / BigInt(balance));
+            : safe((BigInt(left) * BigInt(value)) / BigInt(balance));
         left -= part;
+        balance -= value;
         return { directionId, amountKopecks: part };
       });
       for (const portion of portions)
@@ -1023,14 +1033,26 @@ function buildOperation(raw, context = {}) {
     op.counterpartyId = payment.counterpartyId;
     const incoming = ['payment_in', 'customer_advance'].includes(payment.kind);
     const credit = incoming ? 'customer_advance' : 'supplier_advance';
-    const available =
-      sum(
-        existing
-          .filter((o) => o.legalEntityId === op.legalEntityId)
-          .flatMap((o) => o.postings)
-          .filter((p) => p.account === credit && p.paymentId === payment.id)
-          .map((p) => p.amountKopecks),
-      ) * (incoming ? -1 : 1);
+    const positions = new Map();
+    for (const previous of existing.filter(
+      (o) => o.legalEntityId === op.legalEntityId,
+    ))
+      for (const p of previous.postings || []) {
+        if (p.account !== credit || p.paymentId !== payment.id) continue;
+        const key = `${p.responsibilityScopeId || previous.responsibilityScopeId}:${p.directionId}`;
+        const old = positions.get(key) || {
+          ...scopeOf({ ...previous, ...p }),
+          directionId: p.directionId,
+          balance: 0,
+        };
+        old.balance = sum([old.balance, p.amountKopecks * (incoming ? -1 : 1)]);
+        positions.set(key, old);
+      }
+    const available = sum(
+      [...positions.values()].map((position) => position.balance),
+    );
+    if ([...positions.values()].some((position) => position.balance < 0))
+      fail('INSUFFICIENT_ADVANCE');
     const used = allocations(
       raw.allocations || [],
       incoming ? 'in' : 'out',
@@ -1038,14 +1060,23 @@ function buildOperation(raw, context = {}) {
     );
     if (!used) fail('EMPTY_SETTLEMENT');
     op.amountKopecks = used;
-    add(credit, incoming ? used : -used, {
-      responsibilityScopeId: payment.responsibilityScopeId,
-      regionId: payment.regionId,
-      projectId: payment.projectId,
-      directionId: payment.directionId,
-      counterpartyId: payment.counterpartyId,
-      paymentId: payment.id,
-    });
+    let left = used;
+    let remainingBalance = available;
+    for (const { balance, ...position } of [...positions.values()].filter(
+      (p) => p.balance > 0,
+    )) {
+      const consumed = safe(
+        (BigInt(left) * BigInt(balance)) / BigInt(remainingBalance),
+      );
+      remainingBalance -= balance;
+      left -= consumed;
+      if (consumed)
+        add(credit, incoming ? consumed : -consumed, {
+          ...position,
+          counterpartyId: payment.counterpartyId,
+          paymentId: payment.id,
+        });
+    }
   } else if (kind === 'setoff') {
     required(raw.reason || raw.description, 'SETOFF_BASIS_REQUIRED');
     const ar = getDoc(raw.receivableId);
@@ -1270,12 +1301,18 @@ function buildOperation(raw, context = {}) {
     }));
     op.articleId = original.articleId || null;
     op.article = original.article;
+    if (original.allocationWeights)
+      op.allocationWeights = structuredClone(original.allocationWeights);
+    if (original.allocationRule)
+      op.allocationRule = structuredClone(original.allocationRule);
+    if (original.allocationMethod)
+      op.allocationMethod = original.allocationMethod;
     if (original.articleWarning)
       op.articleWarning = { ...original.articleWarning };
   }
   // Allocation changes the management direction, never the legal owner or cash.
   if (
-    raw.allocationRuleId &&
+    (raw.allocationRuleId || raw.allocationWeights != null) &&
     !['reversal', 'opening', 'adjustment', 'consolidation_adjustment'].includes(
       kind,
     )
@@ -1287,30 +1324,76 @@ function buildOperation(raw, context = {}) {
         'depreciation',
         'fuel_own_consumption',
         'inventory_consumption',
+        'cash_out',
+        'payment_out',
+        'supplier_advance',
       ].includes(kind)
     )
       fail('ALLOCATION_KIND_UNSUPPORTED');
-    const rule = getCatalog(context, raw.allocationRuleId, 'allocation_rules');
-    if (
-      !rule ||
-      rule.archived ||
-      rule.effectiveFrom > op.date ||
-      (rule.effectiveTo && rule.effectiveTo <= op.date)
-    )
-      fail('ALLOCATION_RULE_UNAVAILABLE');
-    op.allocationRule = {
-      id: rule.id,
-      version: rule.version || 1,
-      effectiveFrom: rule.effectiveFrom,
-      weights: weights(rule.weights),
-    };
+    if (raw.allocationRuleId && raw.allocationWeights != null)
+      fail('ALLOCATION_CONFLICT');
+    if (kind === 'payment_out' && op.allocations.length)
+      fail('ALLOCATION_LINKED_DOCUMENTS');
+    let distribution;
+    if (raw.allocationRuleId) {
+      const rule = getCatalog(
+        context,
+        raw.allocationRuleId,
+        'allocation_rules',
+      );
+      if (
+        !rule ||
+        rule.archived ||
+        rule.effectiveFrom > op.date ||
+        (rule.effectiveTo && rule.effectiveTo <= op.date)
+      )
+        fail('ALLOCATION_RULE_UNAVAILABLE');
+      distribution = weights(rule.weights);
+      op.allocationMethod = 'rule';
+      op.allocationRule = {
+        id: rule.id,
+        version: rule.version || 1,
+        effectiveFrom: rule.effectiveFrom,
+        weights: distribution,
+      };
+    } else {
+      distribution = weights(raw.allocationWeights);
+      op.allocationMethod = 'manual';
+      op.allocationWeights = distribution;
+    }
+    const outgoing = ['cash_out', 'payment_out', 'supplier_advance'].includes(
+      kind,
+    );
     op.postings = op.postings.flatMap((p) =>
-      ['expense', 'ap', 'input_vat'].includes(p.account)
-        ? allocateAmount(p.amountKopecks, op.allocationRule.weights)
+      (outgoing
+        ? ['suspense', 'supplier_advance']
+        : ['expense', 'ap', 'input_vat']
+      ).includes(p.account)
+        ? allocateAmount(p.amountKopecks, distribution)
             .filter((s) => s.amountKopecks)
-            .map((s) => ({ ...p, ...s, allocationRuleId: rule.id }))
+            .map((s) => ({
+              ...p,
+              ...s,
+              allocationMethod: op.allocationMethod,
+              ...(op.allocationRule
+                ? { allocationRuleId: op.allocationRule.id }
+                : {}),
+            }))
         : [p],
     );
+    if (outgoing)
+      op.cashFlows = op.cashFlows.flatMap((flow) =>
+        allocateAmount(flow.amountKopecks, distribution)
+          .filter((part) => part.amountKopecks)
+          .map((part) => ({
+            ...flow,
+            ...part,
+            allocationMethod: op.allocationMethod,
+            ...(op.allocationRule
+              ? { allocationRuleId: op.allocationRule.id }
+              : {}),
+          })),
+      );
   }
   if (kind !== 'reversal') {
     const pnlPostings = op.postings.filter((p) =>
@@ -1341,7 +1424,7 @@ function buildOperation(raw, context = {}) {
       },
       context,
       {
-        directionIds: op.allocationRule?.weights?.map(
+        directionIds: (op.allocationWeights || op.allocationRule?.weights)?.map(
           (weight) => weight.directionId,
         ) || [...new Set(primaryTargets.map((p) => p.directionId))],
         allowArchived: !!preserveSnapshot,
@@ -1532,13 +1615,13 @@ function buildReports(state = {}, filters = {}) {
       if (select(p) && ['revenue', 'expense'].includes(p.account)) {
         const articleId = p.articleId || null;
         const name = p.article || o.article;
-        const key = `${p.account}:${articleId ? 'id:' + articleId : 'text:' + name}:${p.allocationRuleId || 'direct'}`;
+        const key = `${p.account}:${articleId ? 'id:' + articleId : 'text:' + name}:${p.allocationRuleId || p.allocationMethod || 'direct'}`;
         const r = pnlMap.get(key) || {
           account: p.account,
           articleId,
           article: articleNames.get(articleId) || name,
           articleNames: [],
-          allocated: !!p.allocationRuleId,
+          allocated: !!p.allocationRuleId || p.allocationMethod === 'manual',
           amountKopecks: 0,
         };
         if (!r.articleNames.includes(name)) r.articleNames.push(name);

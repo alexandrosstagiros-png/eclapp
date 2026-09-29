@@ -33,6 +33,52 @@ const KIND_LABELS = {
   reversal: 'Отмена операции',
   plan: 'План платежа',
 };
+const DISTRIBUTABLE_EXPENSES = [
+  'expense',
+  'interest',
+  'depreciation',
+  'fuel_own_consumption',
+  'inventory_consumption',
+];
+const DISTRIBUTABLE_PAYMENTS = ['cash_out', 'payment_out', 'supplier_advance'];
+const canDistribute = (operation) =>
+  !operation.projected &&
+  !operation.reversed &&
+  operation.status !== 'reversed' &&
+  [...DISTRIBUTABLE_EXPENSES, ...DISTRIBUTABLE_PAYMENTS].includes(
+    operation.kind,
+  );
+const operationWeights = (operation) =>
+  list(operation?.allocationWeights).length
+    ? operation.allocationWeights
+    : list(operation?.allocationRule?.weights);
+const weightBasisPoints = (weight) =>
+  weight.basisPoints ?? Math.round(Number(weight.percent || 0) * 100);
+const distributionPreview = (amount, weights) => {
+  const rows = weights.map((weight) => {
+    const product = BigInt(Math.abs(amount)) * BigInt(weight.basisPoints);
+    return {
+      ...weight,
+      amountKopecks: Number(product / 10000n),
+      remainder: Number(product % 10000n),
+    };
+  });
+  if (weights.reduce((sum, weight) => sum + weight.basisPoints, 0) === 10000) {
+    const remainder =
+      Math.abs(amount) - rows.reduce((sum, row) => sum + row.amountKopecks, 0);
+    const ordered = [...rows].sort(
+      (a, b) =>
+        b.remainder - a.remainder || a.directionId.localeCompare(b.directionId),
+    );
+    for (let i = 0; i < remainder; i++) ordered[i].amountKopecks++;
+  }
+  return new Map(
+    rows.map((row) => [
+      row.directionId,
+      row.amountKopecks * (amount < 0 ? -1 : 1),
+    ]),
+  );
+};
 const STATUS_LABELS = {
   posted: 'Проведено',
   preliminary: 'Предварительно',
@@ -90,6 +136,8 @@ const list = (value) => (Array.isArray(value) ? value : []);
 const errorMessage = (error) => {
   const raw = String(error?.message || 'Не удалось выполнить действие.');
   const messages = {
+    FINANCE_ALLOCATION_LINKED_DOCUMENTS:
+      'Платёж связан с документами. Распределите нужный расход из списка связанных документов.',
     FINANCE_DEPENDENT_OPERATIONS:
       'Документ связан с оплатой или зачётом. Сначала отмените зависимое погашение. Плановую дату можно изменить в календаре без отмены документа.',
     SCOPE_AMBIGUOUS:
@@ -180,7 +228,14 @@ export function createFinanceLedgerWorkspace(
     { id: 'expense', name: 'Расходы' },
     { id: 'other', name: 'Прочее' },
   ];
-  const articleTargets = (catalogs, directionId, allocationRuleId) => {
+  const articleTargets = (
+    catalogs,
+    directionId,
+    allocationRuleId,
+    savedWeights,
+  ) => {
+    if (list(savedWeights).length)
+      return savedWeights.map((item) => item.directionId);
     const rule = list(catalogs?.allocationRules).find(
       (item) => item.id === allocationRuleId,
     );
@@ -561,6 +616,7 @@ export function createFinanceLedgerWorkspace(
       draft.article !== (item.article || '') ||
       draft.counterpartyId !== (item.counterpartyId || '') ||
       draft.kind !== item.kind;
+    const distribution = operationWeights(item);
     const lookup = (kind, id) =>
       itemName(list(catalogs[kind]).find((value) => value.id === id));
     return h(
@@ -648,33 +704,45 @@ export function createFinanceLedgerWorkspace(
       h(
         'td',
         null,
-        canEdit && !item.reversed && item.status !== 'reversed'
+        distribution.length
           ? h(
-              'select',
-              {
-                'aria-label': `Направление: ${item.description || item.id}`,
-                value: draft.directionId,
-                disabled: busy,
-                onChange: (event) =>
-                  setDraft((value) => ({
-                    ...value,
-                    directionId: event.target.value,
-                  })),
-              },
-              h('option', { value: '' }, 'Не определено'),
-              ...list(catalogs.directions)
-                .filter(
-                  (value) => !value.archived || value.id === item.directionId,
-                )
-                .map((value) =>
-                  h(
-                    'option',
-                    { key: value.id, value: value.id },
-                    itemName(value),
-                  ),
+              'div',
+              { className: 'fl-distribution-summary' },
+              ...distribution.map((weight) =>
+                h(
+                  'small',
+                  { key: weight.directionId },
+                  `${lookup('directions', weight.directionId)} · ${weightBasisPoints(weight) / 100}%`,
                 ),
+              ),
             )
-          : item.directionName ||
+          : canEdit && !item.reversed && item.status !== 'reversed'
+            ? h(
+                'select',
+                {
+                  'aria-label': `Направление: ${item.description || item.id}`,
+                  value: draft.directionId,
+                  disabled: busy,
+                  onChange: (event) =>
+                    setDraft((value) => ({
+                      ...value,
+                      directionId: event.target.value,
+                    })),
+                },
+                h('option', { value: '' }, 'Не определено'),
+                ...list(catalogs.directions)
+                  .filter(
+                    (value) => !value.archived || value.id === item.directionId,
+                  )
+                  .map((value) =>
+                    h(
+                      'option',
+                      { key: value.id, value: value.id },
+                      itemName(value),
+                    ),
+                  ),
+              )
+            : item.directionName ||
               (item.directionId
                 ? lookup('directions', item.directionId)
                 : 'Не определено'),
@@ -693,6 +761,7 @@ export function createFinanceLedgerWorkspace(
                 catalogs,
                 draft.directionId,
                 item.allocationRuleId,
+                distribution,
               ),
               disabled: busy,
               onChange: (value) => setDraft((old) => changeArticle(old, value)),
@@ -731,6 +800,11 @@ export function createFinanceLedgerWorkspace(
                 ),
               { disabled: busy },
             ),
+          canEdit &&
+            canDistribute(item) &&
+            button('Распределить', () => showSource(item, 'distribute'), {
+              disabled: busy || dirty,
+            }),
           canEdit &&
             !item.reversed &&
             !['reversal', 'opening', 'settlement', 'setoff'].includes(
@@ -852,7 +926,8 @@ export function createFinanceLedgerWorkspace(
                   articleTargets(
                     data.catalogs,
                     bulkDirection || item.directionId,
-                    item.allocationRuleId,
+                    bulkDirection ? null : item.allocationRuleId,
+                    bulkDirection ? [] : operationWeights(item),
                   ),
                 ),
               ),
@@ -860,6 +935,13 @@ export function createFinanceLedgerWorkspace(
             emptyLabel: 'Не менять',
             disabled: busy,
           }),
+          bulkDirection &&
+            selectedItems.some((item) => operationWeights(item).length) &&
+            h(
+              'small',
+              { className: 'fl-note' },
+              'Одно направление заменит сохранённые доли выбранных операций.',
+            ),
           button(
             'Применить к выбранным',
             async () => {
@@ -869,7 +951,13 @@ export function createFinanceLedgerWorkspace(
                   version: item.version,
                 })),
                 patch: {
-                  ...(bulkDirection ? { directionId: bulkDirection } : {}),
+                  ...(bulkDirection
+                    ? {
+                        directionId: bulkDirection,
+                        allocationWeights: null,
+                        allocationRuleId: null,
+                      }
+                    : {}),
                   ...(bulkArticle.trim() ? { articleId: bulkArticle } : {}),
                 },
               });
@@ -2095,7 +2183,7 @@ export function createFinanceLedgerWorkspace(
           update('directionId'),
           list(catalogs.directions).filter((item) => !item.archived),
           'Не определено',
-          { disabled: busy },
+          { disabled: busy || Boolean(operationWeights(operation).length) },
         ),
         h(ArticleSelect, {
           label: 'Статья',
@@ -2116,6 +2204,7 @@ export function createFinanceLedgerWorkspace(
             catalogs,
             draft.directionId,
             draft.allocationRuleId,
+            operation ? operationWeights(operation) : undefined,
           ),
           disabled: busy,
           onChange: (value) => setDraft((old) => changeArticle(old, value)),
@@ -2132,6 +2221,7 @@ export function createFinanceLedgerWorkspace(
           { disabled: busy },
         ),
         draft.kind === 'expense' &&
+          !operation &&
           select(
             'Распределить общий расход',
             draft.allocationRuleId,
@@ -2317,6 +2407,12 @@ export function createFinanceLedgerWorkspace(
             }),
           ),
         ),
+      operationWeights(operation).length > 0 &&
+        h(
+          'p',
+          { className: 'fl-note' },
+          'Сохранено распределение по направлениям. Доли меняются действием «Распределить» в журнале или в источнике операции.',
+        ),
       localError &&
         h('p', { role: 'alert', className: 'fl-error' }, localError),
       importedCash &&
@@ -2343,7 +2439,383 @@ export function createFinanceLedgerWorkspace(
     );
   }
 
-  function Source({ item, data, mode, busy, save, close }) {
+  function DistributionForm({
+    operation,
+    data,
+    busy,
+    save,
+    close,
+    distribute,
+  }) {
+    const catalogs = data.catalogs || {};
+    const cash = DISTRIBUTABLE_PAYMENTS.includes(operation.kind);
+    const linked = list(operation.distributionDocuments);
+    const hasLinked = cash && list(operation.allocations).length > 0;
+    const rules = list(catalogs.allocationRules).filter(
+      (rule) =>
+        !rule.archived &&
+        (!rule.legalEntityId ||
+          rule.legalEntityId === operation.legalEntityId ||
+          list(rule.legalEntityIds).includes(operation.legalEntityId)) &&
+        (!list(rule.responsibilityScopeIds).length ||
+          rule.responsibilityScopeIds.includes(
+            operation.responsibilityScopeId,
+          )) &&
+        (!rule.effectiveFrom || rule.effectiveFrom <= operation.date) &&
+        (!rule.effectiveTo || rule.effectiveTo > operation.date),
+    );
+    const originalWeights = operationWeights(operation);
+    const [ruleId, setRuleId] = useState(() =>
+      rules.some(
+        (rule) =>
+          rule.id === operation.allocationRuleId &&
+          (!operation.allocationRule?.version ||
+            rule.version === operation.allocationRule.version),
+      )
+        ? operation.allocationRuleId
+        : '',
+    );
+    const [values, setValues] = useState(() =>
+      Object.fromEntries(
+        originalWeights.length
+          ? originalWeights.map((weight) => [
+              weight.directionId,
+              String(weightBasisPoints(weight) / 100),
+            ])
+          : list(catalogs.directions).some(
+                (direction) =>
+                  direction.id === operation.directionId && !direction.system,
+              )
+            ? [[operation.directionId, '100']]
+            : [],
+      ),
+    );
+    const [article, setArticle] = useState({
+      articleId: operation.articleId || null,
+      article: operation.article || '',
+    });
+    const [error, setError] = useState('');
+    const directions = list(catalogs.directions).filter(
+      (direction) =>
+        (!direction.system &&
+          !direction.archived &&
+          (!direction.legalEntityId ||
+            direction.legalEntityId === operation.legalEntityId ||
+            list(direction.legalEntityIds).includes(
+              operation.legalEntityId,
+            ))) ||
+        originalWeights.some((weight) => weight.directionId === direction.id),
+    );
+    let invalid = false;
+    const weights = Object.entries(values).flatMap(([directionId, value]) => {
+      const text = String(value).trim().replace(',', '.');
+      if (!text) return [];
+      if (!/^\d+(?:\.\d{1,2})?$/.test(text) || Number(text) > 100) {
+        invalid = true;
+        return [];
+      }
+      const [whole, fraction = ''] = text.split('.');
+      const basisPoints = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
+      return basisPoints > 0 ? [{ directionId, basisPoints }] : [];
+    });
+    const total = weights.reduce((sum, weight) => sum + weight.basisPoints, 0);
+    const gross = distributionPreview(operation.amountKopecks, weights);
+    const net = distributionPreview(
+      operation.amountKopecks -
+        (operation.vatRecoverable === false ? 0 : operation.vatKopecks || 0),
+      weights,
+    );
+    const selectedArticle = list(catalogs.articles).find(
+      (item) => item.id === article.articleId,
+    );
+    const articleInvalid =
+      selectedArticle &&
+      !articleFits(
+        selectedArticle,
+        weights.map((weight) => weight.directionId),
+      );
+    const valid = !invalid && total === 10000 && !articleInvalid && !hasLinked;
+    return h(
+      'form',
+      {
+        className: 'fl-distribution',
+        onSubmit: async (event) => {
+          event.preventDefault();
+          setError('');
+          if (!valid) {
+            setError(
+              articleInvalid
+                ? 'Статья должна подходить ко всем выбранным направлениям.'
+                : 'Введите доли с точностью до 0,01%; сумма должна быть 100%.',
+            );
+            return;
+          }
+          const body = {
+            version: operation.version,
+            ...(ruleId
+              ? { allocationRuleId: ruleId, allocationWeights: null }
+              : { allocationRuleId: null, allocationWeights: weights }),
+          };
+          if (
+            article.articleId !== (operation.articleId || null) ||
+            article.article !== (operation.article || '')
+          ) {
+            body.articleId = article.articleId;
+            if (!article.articleId) body.article = article.article;
+          }
+          const result = await save(
+            `/operations/${operation.id}`,
+            body,
+            'PATCH',
+          );
+          if (result) close();
+        },
+      },
+      h(
+        'div',
+        { className: 'fl-distribution-overview' },
+        h('strong', null, operation.description || KIND_LABELS[operation.kind]),
+        h(
+          'span',
+          null,
+          `${dateLabel(operation.date)} · ${money(operation.amountKopecks)}`,
+        ),
+        operation.cashAccountId &&
+          h(
+            'small',
+            null,
+            itemName(
+              list(catalogs.accounts).find(
+                (account) => account.id === operation.cashAccountId,
+              ),
+            ),
+          ),
+      ),
+      !hasLinked &&
+        linked.length > 0 &&
+        h(
+          'details',
+          { className: 'fl-note' },
+          h('summary', null, 'Связанные расходы · PnL'),
+          h(
+            'p',
+            null,
+            'Доли этой выплаты меняют ДДС. Расходы по закрывающим документам распределяются отдельно.',
+          ),
+          ...linked.map((document) =>
+            h(
+              'div',
+              { className: 'fl-distribution-document', key: document.id },
+              h(
+                'div',
+                null,
+                h('strong', null, document.description || 'Документ расхода'),
+                h(
+                  'small',
+                  null,
+                  `${dateLabel(document.date)} · ${money(document.amountKopecks)}`,
+                ),
+              ),
+              button('Распределить расход', () => distribute(document), {
+                disabled:
+                  busy || !DISTRIBUTABLE_EXPENSES.includes(document.kind),
+              }),
+            ),
+          ),
+        ),
+      hasLinked
+        ? h(
+            React.Fragment,
+            null,
+            h(
+              'p',
+              { className: 'fl-note' },
+              'Платёж напрямую погашает начисления. Выберите расход: его распределение изменит и направление прямой оплаты, сохранив сумму платежа.',
+            ),
+            ...linked.map((document) =>
+              h(
+                'div',
+                {
+                  className: 'fl-distribution-document',
+                  key: document.id || document.documentId,
+                },
+                h(
+                  'div',
+                  null,
+                  h('strong', null, document.description || 'Документ расхода'),
+                  h(
+                    'small',
+                    null,
+                    `${dateLabel(document.date)} · ${money(document.amountKopecks)}`,
+                  ),
+                ),
+                button(
+                  'Распределить расход',
+                  () =>
+                    distribute({
+                      ...document,
+                      id:
+                        document.operationId ||
+                        document.documentId ||
+                        document.id,
+                    }),
+                  {
+                    disabled:
+                      busy || !DISTRIBUTABLE_EXPENSES.includes(document.kind),
+                  },
+                ),
+              ),
+            ),
+            !linked.length &&
+              h(
+                'p',
+                { role: 'alert', className: 'fl-error' },
+                'Связанные расходные документы недоступны в текущих правах. Проверьте источник платежа.',
+              ),
+          )
+        : h(
+            React.Fragment,
+            null,
+            h(
+              'p',
+              { className: 'fl-note' },
+              cash
+                ? 'Доли распределяют выплату в ДДС. Расход в PnL возникает по отдельному документу начисления; сам платёж его не создаёт. Дата, сумма и счёт платежа сохраняются.'
+                : 'Доли распределяют начисленный расход в PnL и задолженность. НДС к вычету не входит в расход. Прямые оплаты пересчитываются вместе с ним. Ранее выданные авансы сохраняют отдельное распределение ДДС; суммы и даты не меняются.',
+            ),
+            select(
+              'Взять доли из правила',
+              ruleId,
+              (value) => {
+                setRuleId(value);
+                if (value) {
+                  const rule = rules.find((item) => item.id === value);
+                  if (
+                    !article.articleId &&
+                    (!article.article || KIND_LABELS[article.article]) &&
+                    rule?.articleId
+                  )
+                    setArticle({ articleId: rule.articleId, article: '' });
+                  setValues(
+                    Object.fromEntries(
+                      list(rule?.weights).map((weight) => [
+                        weight.directionId,
+                        String(weightBasisPoints(weight) / 100),
+                      ]),
+                    ),
+                  );
+                }
+              },
+              rules,
+              'Разовое распределение',
+              { disabled: busy },
+            ),
+            h(
+              'p',
+              { className: 'muted' },
+              ruleId
+                ? 'Изменение любой доли сохранит отдельное распределение этой операции.'
+                : 'Эти доли сохранятся только в операции. Новое правило в справочнике не создаётся.',
+            ),
+            directions.length
+              ? table(
+                  'Распределение операции',
+                  [
+                    'Направление',
+                    'Доля, %',
+                    cash ? 'Выплата, ₽' : 'С НДС, ₽',
+                    ...(!cash ? ['Расход в PnL, ₽'] : []),
+                  ],
+                  directions.map((direction) =>
+                    h(
+                      'tr',
+                      { key: direction.id },
+                      h(
+                        'td',
+                        null,
+                        `${itemName(direction)}${direction.archived ? ' · архив' : ''}`,
+                      ),
+                      h(
+                        'td',
+                        null,
+                        text(
+                          `Доля: ${itemName(direction)}, %`,
+                          values[direction.id] || '',
+                          (value) => {
+                            setRuleId('');
+                            setValues((old) => ({
+                              ...old,
+                              [direction.id]: value,
+                            }));
+                          },
+                          {
+                            inputMode: 'decimal',
+                            placeholder: '0',
+                            disabled: busy,
+                          },
+                        ),
+                      ),
+                      h(
+                        'td',
+                        { className: 'fl-money' },
+                        money(gross.get(direction.id) || 0),
+                      ),
+                      !cash &&
+                        h(
+                          'td',
+                          { className: 'fl-money' },
+                          money(net.get(direction.id) || 0),
+                        ),
+                    ),
+                  ),
+                )
+              : empty(
+                  'Добавьте бизнес-направления в справочнике, чтобы распределить операцию.',
+                ),
+            h(
+              'output',
+              {
+                className: total === 10000 && !invalid ? 'fl-note' : 'fl-error',
+                'aria-live': 'polite',
+              },
+              invalid
+                ? 'Проверьте доли: от 0 до 100%, до двух знаков после запятой.'
+                : `Итого: ${total / 100}%${total < 10000 ? ` · осталось ${((10000 - total) / 100).toLocaleString('ru-RU')}%` : total > 10000 ? ` · превышение ${((total - 10000) / 100).toLocaleString('ru-RU')}%` : ` · ${money(operation.amountKopecks)}`}`,
+            ),
+            h(ArticleSelect, {
+              label: 'Статья распределения',
+              value: article.articleId,
+              legacy: article.article,
+              catalogs,
+              contexts: [operation],
+              directions: weights.map((weight) => weight.directionId),
+              disabled: busy,
+              onChange: (value) =>
+                setArticle((old) => changeArticle(old, value)),
+            }),
+            articleInvalid &&
+              h(
+                'p',
+                { role: 'alert', className: 'fl-error' },
+                'Текущая статья не применяется ко всем выбранным направлениям. Выберите подходящую статью.',
+              ),
+            error && h('p', { role: 'alert', className: 'fl-error' }, error),
+          ),
+      h(
+        'div',
+        { className: 'fl-toolbar' },
+        !hasLinked &&
+          h(
+            'button',
+            { type: 'submit', className: 'button', disabled: busy || !valid },
+            'Сохранить распределение',
+          ),
+        button('Отмена', close, { disabled: busy }),
+      ),
+    );
+  }
+
+  function Source({ item, data, mode, busy, save, close, distribute }) {
     const [reason, setReason] = useState(''),
       [date, setDate] = useState(today());
     const operation =
@@ -2415,6 +2887,10 @@ export function createFinanceLedgerWorkspace(
           STATUS_LABELS[operation.status] || operation.status || 'Не указан',
         ),
       ),
+      mode === 'source' &&
+        data.context?.permissions?.canEdit &&
+        canDistribute(operation) &&
+        button('Распределить', () => distribute(operation), { disabled: busy }),
       list(operation.postings).length > 0 &&
         table(
           'Отражение операции',
@@ -3934,6 +4410,7 @@ export function createFinanceLedgerWorkspace(
             data.catalogs,
             current('directionId'),
             current('allocationRuleId'),
+            current('allocationWeights') || operation.allocationRule?.weights,
           ),
           disabled: busy,
           onChange: (value) => {
@@ -4325,6 +4802,8 @@ export function createFinanceLedgerWorkspace(
                             row.operation?.directionId,
                           overrides[row.rowNumber]?.allocationRuleId ||
                             row.operation?.allocationRuleId,
+                          overrides[row.rowNumber]?.allocationWeights ||
+                            operationWeights(row.operation),
                         ),
                       ),
                   ),
@@ -5254,7 +5733,7 @@ export function createFinanceLedgerWorkspace(
       setArticleId('');
     }
     async function source(item, mode = 'source') {
-      setDialog({ type: mode, item });
+      setDialog({ type: mode, item, loading: mode === 'distribute' });
       const id =
         item.operationId || item.documentId?.replace(/:cost$/, '') || item.id;
       if (
@@ -5271,11 +5750,20 @@ export function createFinanceLedgerWorkspace(
         );
         if (alive.current && identity.current === token)
           setDialog((current) =>
-            current?.item === item ? { ...current, item: detail } : current,
+            current?.item === item
+              ? { ...current, item: detail, loading: false }
+              : current,
           );
       } catch (reason) {
-        if (alive.current && identity.current === token)
+        if (alive.current && identity.current === token) {
           setError(errorMessage(reason));
+          if (mode === 'distribute')
+            setDialog((current) =>
+              current?.item === item
+                ? { ...current, loading: false, unavailable: true }
+                : current,
+            );
+        }
       }
     }
     function close() {
@@ -5524,6 +6012,7 @@ export function createFinanceLedgerWorkspace(
             title: {
               operation: 'Новая операция',
               edit: 'Изменение операции',
+              distribute: 'Распределение по направлениям',
               reconcile: 'Сверка реестра',
               opening: 'Начальные остатки',
               plan: 'План платежа',
@@ -5557,6 +6046,23 @@ export function createFinanceLedgerWorkspace(
               save: mutate,
               close,
             }),
+          dialog.type === 'distribute' &&
+            !dialog.unavailable &&
+            (dialog.loading
+              ? h(
+                  'p',
+                  { role: 'status' },
+                  'Загружаем операцию и связанные документы…',
+                )
+              : h(DistributionForm, {
+                  key: dialog.item.id,
+                  operation: dialog.item,
+                  data,
+                  busy,
+                  save: mutate,
+                  close,
+                  distribute: (item) => source(item, 'distribute'),
+                })),
           dialog.type === 'plan' &&
             h(PlanForm, {
               data,
@@ -5589,6 +6095,7 @@ export function createFinanceLedgerWorkspace(
               item: dialog.item,
               data,
               mode: dialog.type,
+              distribute: (item) => source(item, 'distribute'),
               busy,
               save: mutate,
               close,

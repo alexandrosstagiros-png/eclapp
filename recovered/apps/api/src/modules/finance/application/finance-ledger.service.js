@@ -106,6 +106,13 @@ const DOMAIN_MESSAGES = {
   EXCESS_DEPRECIATION: 'Амортизация превышает остаточную стоимость.',
   LOAN_OVER_REPAYMENT: 'Погашение превышает остаток займа.',
   SAME_CASH_ACCOUNT: 'Для перевода нужны разные денежные счета.',
+  INVALID_ALLOCATION: 'Укажите направления и положительные доли распределения.',
+  ALLOCATION_KIND_UNSUPPORTED:
+    'Эту операцию нельзя распределить по направлениям.',
+  ALLOCATION_CONFLICT:
+    'Выберите один способ распределения: доли вручную или сохраненное правило.',
+  ALLOCATION_LINKED_DOCUMENTS:
+    'Платеж уже связан с документами. Его направления определяются документами; измените распределение начисления или сначала отмените зачет.',
 };
 const tupleKeys = [
   'legalEntityId',
@@ -184,6 +191,56 @@ function boundedInteger(value, fallback, max = 1000000) {
   if (!Number.isSafeInteger(number) || number < 0 || number > max)
     invalid('Некорректный размер страницы или версия.');
   return number;
+}
+function linkedOperationIds(operation) {
+  return new Set(
+    [
+      operation.paymentId,
+      operation.documentId,
+      operation.receivableId,
+      operation.payableId,
+      ...(operation.allocations || []).flatMap((row) => [
+        row.documentId,
+        row.paymentId,
+      ]),
+      ...(operation.postings || []).flatMap((row) => [
+        row.documentId,
+        row.paymentId,
+        row.originOperationId,
+      ]),
+    ]
+      .filter((id) => typeof id === 'string')
+      .map((id) => id.replace(/:cost$/, ''))
+      .filter((id) => id !== operation.id),
+  );
+}
+function remapAccountingLinks(value, replacements) {
+  if (Array.isArray(value))
+    return value.map((entry) => remapAccountingLinks(entry, replacements));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => {
+      if (
+        [
+          'paymentId',
+          'documentId',
+          'receivableId',
+          'payableId',
+          'originOperationId',
+        ].includes(key) &&
+        typeof entry === 'string'
+      ) {
+        const base = entry.replace(/:cost$/, '');
+        return [
+          key,
+          replacements.has(base)
+            ? replacements.get(base) + (entry.endsWith(':cost') ? ':cost' : '')
+            : entry,
+        ];
+      }
+      return [key, remapAccountingLinks(entry, replacements)];
+    }),
+  );
 }
 function cashSignature(operation) {
   const accounts = new Map();
@@ -893,8 +950,40 @@ class FinanceLedgerService {
       const state = await this.state(client, scopes);
       const operation = state.operations.find((row) => row.id === id);
       if (!operation) missing();
+      const reversedIds = new Set(
+        state.operations.map((row) => row.reversesId).filter(Boolean),
+      );
+      const relatedDocuments = new Set(
+        (operation.allocations || []).map((row) => row.documentId),
+      );
+      for (const settlement of state.operations)
+        if (
+          settlement.kind === 'settlement' &&
+          settlement.paymentId === operation.id &&
+          !reversedIds.has(settlement.id)
+        )
+          for (const allocation of settlement.allocations || [])
+            relatedDocuments.add(allocation.documentId);
+      const distributionDocuments = state.operations
+        .filter(
+          (row) =>
+            row.kind === 'expense' &&
+            !row.projected &&
+            !reversedIds.has(row.id) &&
+            relatedDocuments.has(row.id),
+        )
+        .map((row) => ({
+          id: row.id,
+          description: row.description,
+          kind: row.kind,
+          amountKopecks: row.amountKopecks,
+          date: row.date,
+          directionId: row.directionId,
+          articleId: row.articleId,
+        }));
       return {
         ...operation,
+        distributionDocuments,
         reversed: state.operations.some((row) => row.reversesId === id),
         related: state.operations.filter(
           (row) =>
@@ -1287,6 +1376,38 @@ class FinanceLedgerService {
         !row.responsibilityScopeIds.includes(scope.responsibilityScopeId)
       )
         missing();
+    }
+    if (input.allocationWeights != null) {
+      if (
+        !Array.isArray(input.allocationWeights) ||
+        !input.allocationWeights.length ||
+        input.allocationWeights.length > 100
+      )
+        invalid(
+          'Укажите от 1 до 100 направлений распределения.',
+          'FINANCE_INVALID_ALLOCATION',
+        );
+      if (input.allocationRuleId)
+        invalid(
+          'Выберите доли вручную или сохраненное правило.',
+          'FINANCE_ALLOCATION_CONFLICT',
+        );
+      for (const weight of input.allocationWeights) {
+        object(weight);
+        const direction = state.catalogs.find(
+          (row) =>
+            row.kind === 'directions' &&
+            row.id === weight.directionId &&
+            !row.archived,
+        );
+        if (
+          !direction ||
+          !direction.responsibilityScopeIds.includes(
+            scope.responsibilityScopeId,
+          )
+        )
+          missing();
+      }
     }
     if (input.allocationRuleId) {
       const rule = state.catalogs.find(
@@ -1958,6 +2079,248 @@ class FinanceLedgerService {
       reason: reason(body.reason),
     });
   }
+  async distributionDependencies(client, original, patch, state) {
+    if (
+      !['expense', 'supplier_advance', 'payment_out'].includes(original.kind) ||
+      !['allocationWeights', 'allocationRuleId'].some((key) =>
+        Object.hasOwn(patch, key),
+      )
+    )
+      return [];
+    const reversedIds = new Set(
+      state.operations.map((row) => row.reversesId).filter(Boolean),
+    );
+    const live = state.operations.filter(
+      (row) => row.kind !== 'reversal' && !reversedIds.has(row.id),
+    );
+    const byId = new Map(live.map((row) => [row.id, row]));
+    // Read the complete reference graph independently of scoped projections.
+    // Any hidden dependency blocks a correction, without disclosing its data.
+    const authoritative = (
+      await client.query(
+        `
+      WITH RECURSIVE live AS MATERIALIZED (
+        SELECT o.id,o.data,o.related_scope_ids,o.responsibility_scope_id
+        FROM finance_ledger_operations o WHERE (o.legal_entity_id=$2 OR o.data->>'consolidationOnly'='true') AND o.kind<>'reversal'
+        AND NOT EXISTS (SELECT 1 FROM finance_ledger_operations r WHERE r.reverses_id=o.id)
+      ), edges AS MATERIALIZED (
+        SELECT o.id,regexp_replace(ref.parent,':cost$','') AS parent FROM live o
+        CROSS JOIN LATERAL (
+          SELECT o.data->>'paymentId' AS parent UNION ALL SELECT o.data->>'documentId'
+          UNION ALL SELECT o.data->>'receivableId' UNION ALL SELECT o.data->>'payableId'
+          UNION ALL SELECT a->>'documentId' FROM jsonb_array_elements(coalesce(o.data->'allocations','[]'::jsonb)) a
+          UNION ALL SELECT a->>'paymentId' FROM jsonb_array_elements(coalesce(o.data->'allocations','[]'::jsonb)) a
+          UNION ALL SELECT p->>'documentId' FROM jsonb_array_elements(o.data->'postings') p
+          UNION ALL SELECT p->>'paymentId' FROM jsonb_array_elements(o.data->'postings') p
+          UNION ALL SELECT p->>'originOperationId' FROM jsonb_array_elements(o.data->'postings') p
+        ) ref WHERE ref.parent IS NOT NULL
+      ), graph(id) AS (
+        SELECT $1::uuid UNION SELECT e.id FROM edges e JOIN graph g ON e.parent=g.id::text
+      ) SELECT l.id,l.related_scope_ids,l.responsibility_scope_id FROM live l JOIN graph g ON g.id=l.id`,
+        [original.id, original.legalEntityId],
+      )
+    ).rows;
+    if (authoritative.length > 101)
+      conflict(
+        'Связей слишком много для исправления одной строкой. Разберите связанные документы отдельно.',
+        'FINANCE_DISTRIBUTION_COMPLEX',
+      );
+    if (
+      authoritative.some(
+        (row) =>
+          !(
+            row.related_scope_ids.length
+              ? row.related_scope_ids
+              : [row.responsibility_scope_id]
+          ).every((id) => state.allowedScopeIds.includes(id)) ||
+          !byId.has(row.id),
+      )
+    )
+      forbidden();
+    const incoming = new Map(),
+      outgoing = new Map();
+    for (const row of live) {
+      const parents = linkedOperationIds(row);
+      incoming.set(row.id, parents);
+      for (const parent of parents) {
+        if (!outgoing.has(parent)) outgoing.set(parent, []);
+        outgoing.get(parent).push(row.id);
+      }
+    }
+    const selected = new Set([original.id]),
+      pending = [original.id];
+    while (pending.length) {
+      for (const id of outgoing.get(pending.shift()) || []) {
+        if (selected.has(id)) continue;
+        if (selected.size >= 101)
+          conflict(
+            'Связей слишком много для исправления одной строкой. Разберите связанные документы отдельно.',
+            'FINANCE_DISTRIBUTION_COMPLEX',
+          );
+        selected.add(id);
+        pending.push(id);
+      }
+    }
+    if (selected.size === 1) return [];
+    if (
+      Object.entries(patch).some(
+        ([key, value]) =>
+          ![
+            'allocationWeights',
+            'allocationRuleId',
+            'directionId',
+            'articleId',
+            'article',
+          ].includes(key) &&
+          digest({ value }) !== digest({ value: original[key] }),
+      )
+    )
+      conflict(
+        'У оплаченного расхода можно отдельно изменить распределение. Суммы и другие реквизиты исправляются отдельно.',
+        'FINANCE_DISTRIBUTION_COMPLEX',
+      );
+    const result = [],
+      visited = new Set([original.id]);
+    while (visited.size < selected.size) {
+      const next = [...selected]
+        .filter(
+          (id) =>
+            !visited.has(id) &&
+            [...incoming.get(id)].every(
+              (parent) => !selected.has(parent) || visited.has(parent),
+            ),
+        )
+        .map((id) => byId.get(id))
+        .sort(
+          (a, b) =>
+            a.date.localeCompare(b.date) ||
+            String(a.createdAt || '').localeCompare(
+              String(b.createdAt || ''),
+            ) ||
+            a.id.localeCompare(b.id),
+        )[0];
+      if (
+        !next ||
+        !(
+          original.kind === 'expense'
+            ? ['payment_out', 'settlement']
+            : ['settlement']
+        ).includes(next.kind)
+      )
+        conflict(
+          'Распределение связано со взаимозачетом или другой корректировкой. Сначала разберите эти связи отдельно.',
+          'FINANCE_DISTRIBUTION_COMPLEX',
+        );
+      if (next.projected || next.legalEntityId !== original.legalEntityId)
+        forbidden();
+      visited.add(next.id);
+      result.push(next);
+    }
+    return result;
+  }
+  async replayDistributionDependencies(
+    client,
+    actor,
+    scopes,
+    state,
+    original,
+    replacement,
+    dependencies,
+    key,
+    reason,
+  ) {
+    const mapping = new Map([[original.id, replacement.id]]),
+      replayed = [];
+    for (const previous of dependencies) {
+      const input = remapAccountingLinks(previous, mapping);
+      Object.assign(input, {
+        id: randomUUID(),
+        reason,
+        source: previous.source
+          ? {
+              ...previous.source,
+              version: `${previous.source.version || '1'}:correction:${randomUUID()}`,
+            }
+          : undefined,
+      });
+      for (const name of [
+        'postings',
+        'cashFlows',
+        'createdAt',
+        'originalOperationId',
+        'reversesId',
+        'allocationRule',
+        'allocationMethod',
+      ])
+        delete input[name];
+      const current = await this.insertOperation(
+        client,
+        actor,
+        scopes,
+        input,
+        state,
+        `${key}:replay:${previous.id}`,
+        previous.id,
+        previous.articleId
+          ? { articleId: previous.articleId, article: previous.article }
+          : null,
+      );
+      if (
+        cashSignature(previous) !== cashSignature(current) ||
+        previous.amountKopecks !== current.amountKopecks ||
+        previous.counterpartyId !== current.counterpartyId
+      )
+        conflict(
+          'Распределение не может менять фактические платежи или суммы зачетов.',
+          'FINANCE_CASH_FACT_IMMUTABLE',
+        );
+      mapping.set(previous.id, current.id);
+      replayed.push(current);
+    }
+    const plans = (
+      await client.query(
+        `SELECT * FROM finance_ledger_catalogs WHERE kind='plans' AND NOT archived
+       AND coalesce(data->>'status','planned')<>'cancelled' AND data->>'documentId'=ANY($1::text[]) FOR UPDATE`,
+        [[...mapping.keys()]],
+      )
+    ).rows;
+    for (const row of plans) {
+      if (
+        !row.responsibility_scope_ids.every((id) =>
+          scopes.some((scope) => scope.responsibilityScopeId === id),
+        )
+      )
+        forbidden();
+      const previous = catalogRow(row),
+        current = {
+          ...previous,
+          documentId: mapping.get(previous.documentId),
+          version: previous.version + 1,
+        };
+      await client.query(
+        'UPDATE finance_ledger_catalogs SET data=$2::jsonb,version=$3,updated_by=$4,updated_at=clock_timestamp() WHERE id=$1',
+        [row.id, JSON.stringify(current), current.version, actor.id],
+      );
+      const index = state.catalogs.findIndex((item) => item.id === row.id);
+      if (index >= 0) state.catalogs[index] = current;
+      await this.auditEvent(
+        client,
+        actor,
+        scopes.find(
+          (scope) =>
+            scope.responsibilityScopeId === row.responsibility_scope_ids[0],
+        ),
+        'plan.document_corrected',
+        row.id,
+        {
+          previousDocumentId: previous.documentId,
+          documentId: current.documentId,
+          version: current.version,
+        },
+      );
+    }
+    return { replayed, updatedPlans: plans.length };
+  }
   async patchOperations(supplied, body) {
     object(body);
     object(body.patch);
@@ -1978,6 +2341,7 @@ class FinanceLedgerService {
       'dueDate',
       'counterpartyId',
       'allocationRuleId',
+      'allocationWeights',
       'amountKopecks',
       'vatKopecks',
       'allocations',
@@ -1992,6 +2356,11 @@ class FinanceLedgerService {
     ];
     if (Object.keys(body.patch).some((key) => !allowed.includes(key)))
       invalid('Это поле нельзя изменить массовой правкой.');
+    if (body.patch.allocationWeights != null && body.patch.allocationRuleId)
+      invalid(
+        'Выберите доли вручную или сохраненное правило.',
+        'FINANCE_ALLOCATION_CONFLICT',
+      );
     return this.transaction(supplied, true, async (client, actor, scopes) => {
       const replay = await this.replay(
         client,
@@ -2003,7 +2372,9 @@ class FinanceLedgerService {
       );
       if (replay) return replay;
       const state = await this.state(client, scopes),
-        items = [];
+        items = [],
+        replayedOperations = [];
+      let updatedPlans = 0;
       for (const item of body.items) {
         const original = state.operations.find((op) => op.id === uuid(item.id));
         if (!original) missing();
@@ -2021,6 +2392,28 @@ class FinanceLedgerService {
             'FINANCE_VERSION_CONFLICT',
           );
         const changeReason = body.reason || 'Исправление реквизитов операции';
+        const dependencies = await this.distributionDependencies(
+          client,
+          original,
+          body.patch,
+          state,
+        );
+        for (const dependency of [...dependencies].reverse())
+          await this.insertOperation(
+            client,
+            actor,
+            scopes,
+            {
+              kind: 'reversal',
+              originalOperationId: dependency.id,
+              reversesId: dependency.id,
+              date: dependency.date,
+              legalEntityId: dependency.legalEntityId,
+              reason: changeReason,
+            },
+            state,
+            `${body.idempotencyKey}:reverse:${dependency.id}`,
+          );
         await this.insertOperation(
           client,
           actor,
@@ -2056,6 +2449,18 @@ class FinanceLedgerService {
               }
             : undefined,
         };
+        if (Object.hasOwn(body.patch, 'allocationWeights')) {
+          if (body.patch.allocationWeights == null)
+            delete replacement.allocationWeights;
+          else delete replacement.allocationRuleId;
+        }
+        if (Object.hasOwn(body.patch, 'allocationRuleId')) {
+          if (body.patch.allocationRuleId) delete replacement.allocationWeights;
+          if (body.patch.allocationRuleId == null)
+            delete replacement.allocationRuleId;
+        }
+        delete replacement.allocationRule;
+        delete replacement.allocationMethod;
         if (
           Object.hasOwn(body.patch, 'article') &&
           !Object.hasOwn(body.patch, 'articleId') &&
@@ -2093,6 +2498,19 @@ class FinanceLedgerService {
             'Разнесение не может менять дату, сумму, направление движения или счет фактического платежа. Начисление оформляется отдельным документом; ошибочный денежный факт отменяется отдельно с основанием.',
             'FINANCE_CASH_FACT_IMMUTABLE',
           );
+        const effects = await this.replayDistributionDependencies(
+          client,
+          actor,
+          scopes,
+          state,
+          original,
+          result,
+          dependencies,
+          body.idempotencyKey,
+          changeReason,
+        );
+        replayedOperations.push(...effects.replayed);
+        updatedPlans += effects.updatedPlans;
         items.push(result);
       }
       return this.remember(
@@ -2101,9 +2519,16 @@ class FinanceLedgerService {
         body.idempotencyKey,
         body,
         'operations.patch',
-        { items },
+        {
+          items,
+          distributionEffects: {
+            replayedOperations: replayedOperations.length,
+            updatedPlans,
+            operationIds: replayedOperations.map((row) => row.id),
+          },
+        },
         scopes.filter((scope) =>
-          items.some((item) =>
+          [...items, ...replayedOperations].some((item) =>
             (item.relatedScopeIds || [item.responsibilityScopeId]).includes(
               scope.responsibilityScopeId,
             ),

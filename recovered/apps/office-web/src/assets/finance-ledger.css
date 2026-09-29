@@ -526,3 +526,41 @@
     min-width: 66px;
   }
 }
+
+.fl-distribution-overview {
+  display: grid;
+  gap: 5px;
+}
+.fl-distribution-overview small,
+.fl-distribution-document small {
+  display: block;
+  color: var(--text-secondary, var(--muted));
+  margin-top: 5px;
+}
+.fl-distribution .fl-table td input {
+  width: 88px;
+}
+.fl-distribution .fl-table td {
+  min-width: 90px;
+}
+.fl-distribution .fl-table td:first-child {
+  min-width: 150px;
+}
+.fl-distribution-document {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.fl-distribution-summary {
+  min-width: 160px;
+}
+
+.fl-distribution,
+.fl-distribution > * {
+  min-width: 0;
+}
