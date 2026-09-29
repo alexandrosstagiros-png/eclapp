@@ -3,6 +3,7 @@
 // The journal uses exact signed kopecks: debit is positive, credit negative.
 // Business operations, never report cells, are the accounting source of truth.
 const { randomUUID } = require('node:crypto');
+const { validateArticle, resolveArticle } = require('./finance-articles');
 const COMMON = '__common__';
 const UNASSIGNED = '__unassigned__';
 const MAX = BigInt(Number.MAX_SAFE_INTEGER);
@@ -19,11 +20,17 @@ const ACCOUNTS = Object.freeze({
   },
   loan_receivable: { label: 'Выданные займы', section: 'assets' },
   ap: { label: 'Кредиторская задолженность', section: 'liabilities' },
-  customer_advance: { label: 'Авансы покупателей', section: 'liabilities' },
+  customer_advance: {
+    label: 'Авансы покупателей',
+    section: 'liabilities',
+  },
   output_vat: { label: 'НДС с реализации', section: 'liabilities' },
   loan_payable: { label: 'Полученные займы', section: 'liabilities' },
   tax_payable: { label: 'Налоги к уплате', section: 'liabilities' },
-  payroll_payable: { label: 'Расчеты по оплате труда', section: 'liabilities' },
+  payroll_payable: {
+    label: 'Расчеты по оплате труда',
+    section: 'liabilities',
+  },
   equity: { label: 'Капитал', section: 'equity' },
   retained_earnings: { label: 'Накопленный результат', section: 'equity' },
   revenue: { label: 'Выручка', section: 'pnl' },
@@ -274,6 +281,7 @@ function validateCatalog(kind, raw = {}, context = {}) {
     ![
       'parties',
       'directions',
+      'articles',
       'accounts',
       'allocation_rules',
       'plans',
@@ -291,6 +299,7 @@ function validateCatalog(kind, raw = {}, context = {}) {
     id: input.id || randomUUID(),
     name: required(input.name || input.label, 'NAME_REQUIRED'),
   };
+  if (kind === 'articles') return validateArticle(value);
   if (kind === 'parties') {
     if (value.inn && !/^\d{10}(?:\d{2})?$/.test(value.inn)) fail('INVALID_INN');
     if (value.kpp && !/^\d{9}$/.test(value.kpp)) fail('INVALID_KPP');
@@ -428,6 +437,8 @@ function documentRows(ops) {
           remainingKopecks: 0,
           status: op.status,
           description: op.description || op.article || '',
+          articleId: p.articleId || null,
+          article: p.article || op.article || '',
           intercompany: p.intercompany || null,
           directionAmounts: {},
           originalDirectionAmounts: {},
@@ -511,6 +522,11 @@ function buildOperation(raw, context = {}) {
   required(owner.legalEntityId, 'LEGAL_ENTITY_REQUIRED');
   const kind = raw.kind;
   if (!OPERATION_KINDS.includes(kind)) fail('INVALID_OPERATION_KIND');
+  if (!raw.articleId && !raw.article && raw.allocationRuleId) {
+    const rule = getCatalog(context, raw.allocationRuleId, 'allocation_rules');
+    if (rule?.articleId || rule?.article)
+      raw = { ...raw, articleId: rule.articleId, article: rule.article };
+  }
   const op = {
     ...raw,
     ...owner,
@@ -535,6 +551,7 @@ function buildOperation(raw, context = {}) {
     expectedDate: date(raw.expectedDate || raw.plannedDate, true),
     description: String(raw.description || '').slice(0, 2000),
     article: String(raw.article || kind).slice(0, 200),
+    articleId: raw.articleId || null,
     postings: [],
     allocations: [],
     cashFlows: [],
@@ -580,8 +597,14 @@ function buildOperation(raw, context = {}) {
       directionId: op.directionId,
       counterpartyId: op.counterpartyId || null,
       article: op.article,
+      articleId: op.articleId,
       ...(op.intercompany ? { intercompany: op.intercompany } : {}),
       ...extra,
+      ...(extra.article &&
+      extra.article !== op.article &&
+      extra.articleId === undefined
+        ? { articleId: null }
+        : {}),
       account,
       amountKopecks: n,
     });
@@ -617,6 +640,7 @@ function buildOperation(raw, context = {}) {
       cashAccountId,
       category,
       article: op.article,
+      articleId: op.articleId,
       ...(flowIntercompany || op.intercompany
         ? { intercompany: flowIntercompany || op.intercompany }
         : {}),
@@ -1070,7 +1094,9 @@ function buildOperation(raw, context = {}) {
     if (toAccountId === (raw.cashAccountId || raw.accountId))
       fail('SAME_CASH_ACCOUNT');
     cash(-amount, op.directionId, 'internal');
-    cash(amount, op.directionId, 'internal', { cashAccountId: toAccountId });
+    cash(amount, op.directionId, 'internal', {
+      cashAccountId: toAccountId,
+    });
   } else if (
     ['opening', 'adjustment', 'consolidation_adjustment'].includes(kind)
   ) {
@@ -1228,6 +1254,10 @@ function buildOperation(raw, context = {}) {
       ...p,
       amountKopecks: -p.amountKopecks,
     }));
+    op.articleId = original.articleId || null;
+    op.article = original.article;
+    if (original.articleWarning)
+      op.articleWarning = { ...original.articleWarning };
   }
   // Allocation changes the management direction, never the legal owner or cash.
   if (
@@ -1267,6 +1297,59 @@ function buildOperation(raw, context = {}) {
             .map((s) => ({ ...p, ...s, allocationRuleId: rule.id }))
         : [p],
     );
+  }
+  if (kind !== 'reversal') {
+    const pnlPostings = op.postings.filter((p) =>
+      ['revenue', 'expense'].includes(p.account),
+    );
+    const economic = pnlPostings.length
+      ? pnlPostings
+      : op.cashFlows.length
+        ? op.cashFlows
+        : op.postings.filter((p) => !['cash', 'treasury'].includes(p.account));
+    const usesPrimary = (p) =>
+      (p.articleId || null) === (raw.articleId || null) &&
+      p.article === op.article;
+    const primaryTargets = economic.filter(usesPrimary);
+    const preserveSnapshot =
+      raw.articleId &&
+      context.preserveArticleSnapshot &&
+      context.preserveArticleSnapshot.articleId === raw.articleId;
+    const resolved = resolveArticle(
+      {
+        ...op,
+        article: raw.article,
+        responsibilityScopeIds: [
+          ...new Set(
+            primaryTargets.map((p) => p.responsibilityScopeId).filter(Boolean),
+          ),
+        ],
+      },
+      context,
+      {
+        directionIds: op.allocationRule?.weights?.map(
+          (weight) => weight.directionId,
+        ) || [...new Set(primaryTargets.map((p) => p.directionId))],
+        allowArchived: !!preserveSnapshot,
+      },
+    );
+    if (preserveSnapshot)
+      resolved.article = context.preserveArticleSnapshot.article;
+    delete op.articleWarning;
+    for (const p of [...op.postings, ...op.cashFlows]) {
+      const value = usesPrimary(p)
+        ? resolved
+        : resolveArticle(p, context, {
+            directionIds: economic.includes(p) ? [p.directionId] : [],
+          });
+      p.articleId = value.articleId;
+      p.article = value.article || p.article;
+      if (value.articleWarning) p.articleWarning = value.articleWarning;
+      else delete p.articleWarning;
+    }
+    op.articleId = resolved.articleId;
+    op.article = resolved.article || op.article;
+    if (resolved.articleWarning) op.articleWarning = resolved.articleWarning;
   }
   if (sum(op.postings.map((p) => p.amountKopecks)) !== 0)
     fail('UNBALANCED_OPERATION');
@@ -1376,7 +1459,13 @@ function selectedOperations(state, filters) {
         postings.length !== (o.postings || []).length ||
         cashFlows.length !== (o.cashFlows || []).length;
       return projected
-        ? { ...o, projected: true, amountKopecks: null, postings, cashFlows }
+        ? {
+            ...o,
+            projected: true,
+            amountKopecks: null,
+            postings,
+            cashFlows,
+          }
         : o;
     });
 }
@@ -1402,6 +1491,11 @@ function buildReports(state = {}, filters = {}) {
   const balances = new Map();
   const pnlMap = new Map();
   const cfMap = new Map();
+  const articleNames = new Map(
+    catalogs(state)
+      .filter((row) => row.kind === 'articles')
+      .map((row) => [row.id, row.name]),
+  );
   const warnings = (code, message, amountKopecks = 0, severity = 'warning') =>
     controls.push({ code, severity, message, amountKopecks });
   for (const o of ops) {
@@ -1422,13 +1516,18 @@ function buildReports(state = {}, filters = {}) {
   for (const o of period)
     for (const p of o.postings || [])
       if (select(p) && ['revenue', 'expense'].includes(p.account)) {
-        const key = `${p.account}:${p.article || o.article}:${p.allocationRuleId || 'direct'}`;
+        const articleId = p.articleId || null;
+        const name = p.article || o.article;
+        const key = `${p.account}:${articleId ? 'id:' + articleId : 'text:' + name}:${p.allocationRuleId || 'direct'}`;
         const r = pnlMap.get(key) || {
           account: p.account,
-          article: p.article || o.article,
+          articleId,
+          article: articleNames.get(articleId) || name,
+          articleNames: [],
           allocated: !!p.allocationRuleId,
           amountKopecks: 0,
         };
+        if (!r.articleNames.includes(name)) r.articleNames.push(name);
         r.amountKopecks = sum([
           r.amountKopecks,
           p.account === 'revenue' ? -p.amountKopecks : p.amountKopecks,
@@ -1619,14 +1718,18 @@ function buildReports(state = {}, filters = {}) {
         if (group && group.amountKopecks === 0 && group.entities.size > 1)
           continue;
       }
-      const key = `${f.category}:${f.article}`;
+      const key = `${f.category}:${f.articleId ? 'id:' + f.articleId : 'text:' + f.article}`;
       const row = cfMap.get(key) || {
         category: f.category,
-        article: f.article,
+        articleId: f.articleId || null,
+        article: articleNames.get(f.articleId) || f.article,
+        articleNames: [],
         inflowKopecks: 0,
         outflowKopecks: 0,
         netKopecks: 0,
       };
+      if (!row.articleNames.includes(f.article))
+        row.articleNames.push(f.article);
       if (f.flow === 'in' || (!f.flow && f.amountKopecks >= 0)) {
         inflow = sum([inflow, f.amountKopecks]);
         row.inflowKopecks = sum([row.inflowKopecks, f.amountKopecks]);
@@ -1787,6 +1890,35 @@ function buildReports(state = {}, filters = {}) {
       'Есть предварительные начисления',
       provisional,
     );
+  const legacyArticles = ops
+    .filter((o) => o.kind !== 'reversal' && !reversedIds.has(o.id))
+    .flatMap((o) => {
+      const pnl = (o.postings || []).filter((p) =>
+        ['revenue', 'expense'].includes(p.account),
+      );
+      return (pnl.length ? pnl : o.cashFlows || [])
+        .filter(
+          (p) =>
+            select(p) &&
+            !p.articleId &&
+            p.article &&
+            !OPERATION_KINDS.includes(p.article),
+        )
+        .map((p) => ({
+          article: p.article,
+          amountKopecks: p.amountKopecks,
+        }));
+    });
+  if (legacyArticles.length)
+    controls.push({
+      code: 'LEGACY_ARTICLE',
+      severity: 'warning',
+      blocking: false,
+      message: 'Есть статьи из источников, не сопоставленные со справочником',
+      amountKopecks: sum(legacyArticles.map((p) => Math.abs(p.amountKopecks))),
+      articleNames: [...new Set(legacyArticles.map((p) => p.article))],
+      postingCount: legacyArticles.length,
+    });
   const suspense = sum(
     ops
       .filter((o) => o.kind !== 'reversal' && !reversedIds.has(o.id))

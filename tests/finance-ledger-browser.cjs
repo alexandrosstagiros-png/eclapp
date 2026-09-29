@@ -19,6 +19,8 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     );
     const session = await fixture.devLogin(ids.admin);
     const api = async (method, route, body) => {
+      if (method === 'GET' && (!route || route.startsWith('?')))
+        route += `${route ? '&' : '?'}from=2020-01-01&to=2030-12-31`;
       const response = await fixture.request(
         method,
         `/finance/ledger${route}`,
@@ -55,8 +57,28 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       name: 'Синтетический банк',
       type: 'bank',
     });
+    const transportArticle = await api('PUT', '/catalogs/articles', {
+      ...common,
+      name: 'Перевозки',
+      category: 'income',
+      directionIds: [],
+    });
+    const reviewedArticle = await api('PUT', '/catalogs/articles', {
+      ...common,
+      name: 'Проверено',
+      category: 'expense',
+      directionIds: [],
+    });
+    const communicationArticle = await api('PUT', '/catalogs/articles', {
+      ...common,
+      name: 'Связь',
+      category: 'expense',
+      directionIds: [],
+    });
     const now = new Date(),
-      date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      date = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Europe/Moscow',
+      }).format(now);
     browser = await chromium.launch({
       headless: true,
       ...(process.env.CHROME_PATH
@@ -123,7 +145,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await form
       .getByLabel('Направление', { exact: true })
       .selectOption(direction.id);
-    await form.getByLabel('Статья', { exact: true }).fill('Перевозки');
+    await form
+      .getByLabel('Статья', { exact: true })
+      .selectOption(transportArticle.id);
     await form
       .getByLabel('Назначение', { exact: true })
       .fill('Выполненная перевозка');
@@ -231,6 +255,11 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await nav
       .getByRole('button', { name: 'Платёжный календарь', exact: true })
       .click();
+    if (process.env.FINANCE_BROWSER_DEBUG) {
+      await page.getByRole('heading', { name: 'Платёжный календарь', exact: true }).waitFor();
+      console.log('CALENDAR DEBUG', JSON.stringify((await api('GET', '')).calendar));
+      console.log('CALENDAR UI', await page.locator('.fl-workspace').innerText());
+    }
     const paymentDate = page
       .getByLabel('Дата платежа: Выполненная перевозка', { exact: true })
       .first();
@@ -303,7 +332,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       });
     await page
       .getByLabel('Статья для выбранных', { exact: true })
-      .fill('Проверено');
+      .selectOption(reviewedArticle.id);
     await page
       .getByRole('button', { name: 'Применить к выбранным', exact: true })
       .click();
@@ -349,15 +378,13 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       name: 'Загрузка финансовых данных',
       exact: true,
     });
-    await imported
-      .getByLabel('Файл', { exact: true })
-      .setInputFiles({
-        name: 'synthetic-bank.csv',
-        mimeType: 'text/csv',
-        buffer: Buffer.from(
-          `date;income;description;inn;source_id\n${date};15;Поступление из проверочной выписки;7701234567;browser-bank-1\n`,
-        ),
-      });
+    await imported.getByLabel('Файл', { exact: true }).setInputFiles({
+      name: 'synthetic-bank.csv',
+      mimeType: 'text/csv',
+      buffer: Buffer.from(
+        `date;income;description;inn;source_id\n${date};15;Поступление из проверочной выписки;7701234567;browser-bank-1\n`,
+      ),
+    });
     await imported
       .getByRole('button', { name: 'Проверить файл', exact: true })
       .click();
@@ -628,7 +655,9 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
     await page
       .getByLabel('Начислять расход за наступивший период', { exact: true })
       .check();
-    await page.getByLabel('Статья начисления', { exact: true }).fill('Связь');
+    await page
+      .getByLabel('Статья начисления', { exact: true })
+      .selectOption(communicationArticle.id);
     await page
       .getByRole('button', { name: 'Сохранить запись', exact: true })
       .click();

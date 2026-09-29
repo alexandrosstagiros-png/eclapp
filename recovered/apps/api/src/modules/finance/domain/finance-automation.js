@@ -1,6 +1,7 @@
 'use strict';
 
 const { createHash } = require('node:crypto');
+const { resolveArticle } = require('./finance-articles');
 const fail = (message) => {
   const e = new Error(message);
   e.code = 'FINANCE_AUTOMATION_INVALID';
@@ -97,14 +98,18 @@ function validateAutomationCatalog(kind, value) {
       integer(value.accrual.vatKopecks, 'НДС услуги', true);
       if (value.accrual.vatKopecks > value.amountKopecks)
         fail('НДС больше суммы услуги.');
-      if (!value.accrual.article?.trim())
+      if (
+        !value.accrual.articleId &&
+        !value.articleId &&
+        !value.accrual.article?.trim()
+      )
         fail('Укажите статью регулярного расхода.');
     }
   }
   return value;
 }
 
-function applyFuelRules(row, rules) {
+function applyFuelRules(row, rules, articleContext) {
   if (!row.fuel) return row;
   const out = structuredClone(row),
     op = out.operation;
@@ -173,6 +178,7 @@ function applyFuelRules(row, rules) {
     directionId: rule.directionId,
     purchaseMode: rule.purchaseMode || 'payable',
     article: rule.article || 'Продажа топлива',
+    articleId: rule.articleId || null,
     status: 'provisional',
     litres,
     fuelCard: out.fuel.card,
@@ -188,6 +194,14 @@ function applyFuelRules(row, rules) {
   });
   if (!op.responsibilityScopeId && rule.responsibilityScopeIds?.length === 1)
     op.responsibilityScopeId = rule.responsibilityScopeIds[0];
+  if (articleContext) {
+    try {
+      Object.assign(op, resolveArticle(op, articleContext));
+    } catch (error) {
+      out.status = 'error';
+      out.issues.push(error.userMessage || error.message);
+    }
+  }
   for (const [key, target, base] of [
     ['saleVatBasisPoints', 'vatKopecks', amount],
     ['costVatBasisPoints', 'costVatKopecks', cost],
@@ -307,6 +321,7 @@ function recurringPreviewRows(state, from, to) {
         allocationRuleId: plan.allocationRuleId,
         description: `${plan.name} · ${period.month}`,
         article: plan.accrual.article,
+        articleId: plan.accrual.articleId || plan.articleId || null,
         status: 'provisional',
         source: {
           system: 'recurring',
@@ -314,7 +329,37 @@ function recurringPreviewRows(state, from, to) {
           version: String(plan.version || 1),
         },
       },
-    }));
+    }))
+    .map((row) => {
+      try {
+        const plan = state.catalogs.find(
+          (item) =>
+            item.kind === 'plans' && row.sourceId.startsWith(item.id + ':'),
+        );
+        const allocation = state.catalogs.find(
+          (item) => item.id === row.operation.allocationRuleId,
+        );
+        Object.assign(
+          row.operation,
+          resolveArticle(
+            {
+              ...row.operation,
+              responsibilityScopeIds: plan?.responsibilityScopeIds,
+            },
+            state,
+            {
+              directionIds: allocation?.weights?.map(
+                (item) => item.directionId,
+              ) || [row.operation.directionId],
+            },
+          ),
+        );
+      } catch (error) {
+        row.status = 'error';
+        row.issues.push(error.userMessage || error.message);
+      }
+      return row;
+    });
 }
 module.exports = {
   validateAutomationCatalog,

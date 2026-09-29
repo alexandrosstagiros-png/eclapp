@@ -29,6 +29,7 @@ const KINDS = {
   counterparties: 'parties',
   parties: 'parties',
   directions: 'directions',
+  articles: 'articles',
   accounts: 'accounts',
   allocationRules: 'allocation_rules',
   allocation_rules: 'allocation_rules',
@@ -39,13 +40,14 @@ const KINDS = {
 const CATALOG_KEYS = {
   parties: 'counterparties',
   directions: 'directions',
+  articles: 'articles',
   accounts: 'accounts',
   allocation_rules: 'allocationRules',
   classification_rules: 'classificationRules',
   plans: 'plans',
   reconciliations: 'reconciliations',
 };
-const SHARED_CATALOGS = new Set(['parties', 'directions']);
+const SHARED_CATALOGS = new Set(['parties', 'directions', 'articles']);
 const DOMAIN_MESSAGES = {
   INVALID_MONEY: 'Сумма должна быть числом с точностью до копейки.',
   AMOUNT_REQUIRED: 'Укажите сумму операции.',
@@ -207,6 +209,7 @@ function callDomain(name, ...args) {
       throw new Type({
         code: error.code,
         message:
+          error.userMessage ||
           DOMAIN_MESSAGES[error.code.slice(8)] ||
           (/^[A-Z_]+(?::|$)/.test(String(error.message))
             ? 'Проверьте поля операции и связанные документы.'
@@ -673,6 +676,14 @@ class FinanceLedgerService {
         );
       }
       if (query.status) all = all.filter((op) => op.status === query.status);
+      if (query.articleId) {
+        uuid(query.articleId);
+        all = all.filter(
+          (op) =>
+            op.articleId === query.articleId ||
+            op.postings?.some((row) => row.articleId === query.articleId),
+        );
+      }
       if (query.article)
         all = all.filter(
           (op) =>
@@ -1056,6 +1067,67 @@ class FinanceLedgerService {
           [actor.id, ...tuple(scope), scope.personalDataVisible],
         );
         affectedScopes = [scope];
+        // Carry forward only masters that were genuinely common to every
+        // previously accessible scope. Never expand private/hidden records.
+        const previousScopeIds = scopes.map((row) => row.responsibilityScopeId);
+        const shared = (
+          await client.query(
+            `SELECT * FROM finance_ledger_catalogs WHERE kind IN ('directions','articles')
+           AND NOT archived AND responsibility_scope_ids @> $1::uuid[]
+           AND responsibility_scope_ids <@ $1::uuid[] FOR UPDATE`,
+            [previousScopeIds],
+          )
+        ).rows.map(catalogRow);
+        const directionIds = new Set(
+          shared
+            .filter((row) => row.kind === 'directions')
+            .map((row) => row.id),
+        );
+        for (const row of shared) {
+          if (
+            row.kind === 'articles' &&
+            row.directionIds?.some(
+              (directionId) =>
+                directionId !== '__common__' && !directionIds.has(directionId),
+            )
+          )
+            continue;
+          const data = {
+            ...row,
+            version: row.version + 1,
+            responsibilityScopeIds: [
+              ...row.responsibilityScopeIds,
+              scope.responsibilityScopeId,
+            ],
+            legalEntityIds: [
+              ...new Set([...scopes.map((entry) => entry.legalEntityId), id]),
+            ],
+          };
+          await client.query(
+            'UPDATE finance_ledger_catalogs SET data=$2::jsonb,version=$3,responsibility_scope_ids=$4,updated_by=$5,updated_at=clock_timestamp() WHERE id=$1',
+            [
+              row.id,
+              JSON.stringify(data),
+              data.version,
+              data.responsibilityScopeIds,
+              actor.id,
+            ],
+          );
+          await this.auditEvent(
+            client,
+            actor,
+            scope,
+            'catalog.company_attached',
+            row.id,
+            {
+              kind: row.kind,
+              version: data.version,
+              legalEntityId: id,
+              beforeScopeIds: row.responsibilityScopeIds,
+              afterScopeIds: data.responsibilityScopeIds,
+            },
+          );
+        }
       }
       const result = { ...companyRow(saved), complete: true, canEdit: true };
       await this.auditEvent(
@@ -1183,7 +1255,7 @@ class FinanceLedgerService {
         'FINANCE_PERIOD_CLOSED',
       );
   }
-  references(input, scope, state) {
+  references(input, scope, state, preserveArticleSnapshot = null) {
     const checks = [
       ['counterpartyId', 'parties'],
       ['supplierCounterpartyId', 'parties'],
@@ -1191,6 +1263,7 @@ class FinanceLedgerService {
       ['cashAccountId', 'accounts'],
       ['toCashAccountId', 'accounts'],
       ['allocationRuleId', 'allocation_rules'],
+      ['articleId', 'articles'],
     ];
     for (const [key, kind] of checks) {
       const id = input[key];
@@ -1204,12 +1277,25 @@ class FinanceLedgerService {
       );
       if (
         !row ||
-        row.archived ||
+        (row.archived &&
+          !(
+            kind === 'articles' && preserveArticleSnapshot?.articleId === id
+          )) ||
         (!SHARED_CATALOGS.has(kind) &&
           row.legalEntityId !== scope.legalEntityId) ||
         !row.responsibilityScopeIds.includes(scope.responsibilityScopeId)
       )
         missing();
+    }
+    if (input.allocationRuleId) {
+      const rule = state.catalogs.find(
+        (row) =>
+          row.id === input.allocationRuleId && row.kind === 'allocation_rules',
+      );
+      for (const weight of rule?.weights || [])
+        this.references({ directionId: weight.directionId }, scope, state);
+      if (!input.articleId && !input.article && rule?.articleId)
+        this.references({ articleId: rule.articleId }, scope, state);
     }
     for (const id of [
       input.paymentId,
@@ -1251,8 +1337,55 @@ class FinanceLedgerService {
         this.references({ ...dimensions, kind: 'posting' }, scope, state);
       }
   }
+  resolveCatalogArticle(kind, value, state) {
+    if (!['plans', 'classification_rules', 'allocation_rules'].includes(kind))
+      return value;
+    try {
+      const { resolveArticle } = require('../domain/finance-articles');
+      const directionIds = value.allocationRuleId
+        ? state.catalogs
+            .find(
+              (row) =>
+                row.id === value.allocationRuleId &&
+                row.kind === 'allocation_rules',
+            )
+            ?.weights?.map((row) => row.directionId)
+        : kind === 'allocation_rules'
+          ? value.weights?.map((row) => row.directionId)
+          : value.directionId
+            ? [value.directionId]
+            : kind === 'plans'
+              ? ['__common__']
+              : [];
+      Object.assign(value, resolveArticle(value, state, { directionIds }));
+      if (value.accrual) {
+        const accrual = { ...value, ...value.accrual };
+        delete accrual.accrual;
+        const rule = state.catalogs.find(
+          (row) =>
+            row.kind === 'allocation_rules' &&
+            row.id === accrual.allocationRuleId,
+        );
+        Object.assign(
+          value.accrual,
+          resolveArticle(accrual, state, {
+            directionIds: rule?.weights?.map((row) => row.directionId) || [
+              accrual.directionId || '__common__',
+            ],
+          }),
+        );
+      }
+      return value;
+    } catch (error) {
+      if (error.code?.startsWith('FINANCE_'))
+        invalid(error.userMessage || error.message, error.code);
+      throw error;
+    }
+  }
   async saveCatalog(supplied, kindInput, body) {
     object(body);
+    if (Object.hasOwn(body, 'data'))
+      invalid('Используйте плоские поля записи справочника.');
     const kind = KINDS[kindInput];
     if (!kind) invalid('Неизвестный справочник.');
     return this.transaction(supplied, true, async (client, actor, scopes) => {
@@ -1330,6 +1463,7 @@ class FinanceLedgerService {
         },
         state,
       );
+      this.resolveCatalogArticle(kind, normalized, state);
       try {
         require('../domain/finance-automation').validateAutomationCatalog(
           kind,
@@ -1339,6 +1473,80 @@ class FinanceLedgerService {
         if (error.code?.startsWith('FINANCE_'))
           invalid(error.message, error.code);
         throw error;
+      }
+      if (kind === 'articles') {
+        const helpers = require('../domain/finance-articles');
+        normalized.normalizedName = helpers.normalizeArticleName(
+          normalized.name,
+        );
+        normalized.normalizedCode = helpers.normalizeArticleCode(
+          normalized.code,
+        );
+        for (const directionId of normalized.directionIds) {
+          if (directionId === '__common__') continue;
+          const direction = state.catalogs.find(
+            (row) => row.kind === 'directions' && row.id === directionId,
+          );
+          if (
+            !direction ||
+            (direction.archived && !old?.directionIds?.includes(directionId)) ||
+            !scopeIds.some((scopeId) =>
+              direction.responsibilityScopeIds.includes(scopeId),
+            )
+          )
+            missing();
+        }
+        if (!normalized.archived) {
+          const duplicate = await client.query(
+            `SELECT id FROM finance_ledger_catalogs WHERE kind='articles' AND NOT archived AND id<>$1
+             AND responsibility_scope_ids && $2::uuid[] AND
+             (data->>'normalizedName'=$3 OR ($4<>'' AND data->>'normalizedCode'=$4))`,
+            [
+              id,
+              scopeIds,
+              normalized.normalizedName,
+              normalized.normalizedCode,
+            ],
+          );
+          if (duplicate.rowCount)
+            conflict(
+              'Статья с таким названием или кодом уже существует. Используйте существующую статью.',
+              'FINANCE_ARTICLE_DUPLICATE',
+            );
+        }
+        if (old) {
+          const dependencies = await client.query(
+            `SELECT * FROM finance_ledger_catalogs WHERE NOT archived
+             AND kind IN ('plans','classification_rules','allocation_rules')
+             AND (kind<>'plans' OR coalesce(data->>'status','planned')<>'cancelled')
+             AND (kind='plans' OR coalesce(data->>'active','true')<>'false')
+             AND (data->>'articleId'=$1 OR data#>>'{accrual,articleId}'=$1)`,
+            [id],
+          );
+          const nextState = {
+            ...state,
+            catalogs: [
+              ...state.catalogs.filter((row) => row.id !== id),
+              { ...normalized, kind: 'articles' },
+            ],
+          };
+          for (const dependency of dependencies.rows) {
+            try {
+              this.resolveCatalogArticle(
+                dependency.kind,
+                structuredClone(catalogRow(dependency)),
+                nextState,
+              );
+            } catch (error) {
+              if (error instanceof BadRequestException)
+                conflict(
+                  'Изменение статьи нарушит действующий план или правило. Сначала отмените план, отключите правило или замените в них статью.',
+                  'FINANCE_ARTICLE_IN_USE',
+                );
+              throw error;
+            }
+          }
+        }
       }
       if (kind === 'parties' && normalized.inn && !body.archived) {
         // Avoid leaking an inaccessible duplicate's details; the user must ask
@@ -1353,7 +1561,9 @@ class FinanceLedgerService {
             'FINANCE_DUPLICATE_COUNTERPARTY',
           );
       }
-      if (kind === 'allocation_rules')
+      if (kind === 'allocation_rules') {
+        for (const scope of selectedScopes)
+          this.references({ articleId: normalized.articleId }, scope, state);
         for (const weight of normalized.weights || []) {
           const target = state.catalogs.find(
             (row) =>
@@ -1369,6 +1579,7 @@ class FinanceLedgerService {
           )
             missing();
         }
+      }
       if (kind === 'classification_rules') {
         if (
           !normalized.counterpartyId &&
@@ -1380,6 +1591,7 @@ class FinanceLedgerService {
           invalid('Правилу нужны контрагент или текст назначения.');
         if (
           !normalized.directionId &&
+          !normalized.articleId &&
           !(typeof normalized.article === 'string' && normalized.article.trim())
         )
           invalid('Укажите статью или направление правила.');
@@ -1401,6 +1613,12 @@ class FinanceLedgerService {
       if (kind === 'plans') {
         const scope = this.resolveScope(normalized, selectedScopes, state);
         this.references(normalized, scope, state);
+        if (normalized.accrual)
+          this.references(
+            { ...normalized, ...normalized.accrual },
+            scope,
+            state,
+          );
         if (old?.documentId && normalized.documentId !== old.documentId)
           conflict(
             'Связь существующего плана с документом не меняется молча. Отмените план и создайте новый.',
@@ -1423,8 +1641,16 @@ class FinanceLedgerService {
         );
       else
         await client.query(
-          'INSERT INTO finance_ledger_catalogs(id,kind,legal_entity_id,responsibility_scope_ids,data,created_by,updated_by) VALUES($1,$2,$3,$4,$5::jsonb,$6,$6)',
-          [id, kind, entityId, scopeIds, JSON.stringify(data), actor.id],
+          'INSERT INTO finance_ledger_catalogs(id,kind,legal_entity_id,responsibility_scope_ids,data,created_by,updated_by,archived) VALUES($1,$2,$3,$4,$5::jsonb,$6,$6,$7)',
+          [
+            id,
+            kind,
+            entityId,
+            scopeIds,
+            JSON.stringify(data),
+            actor.id,
+            normalized.archived === true,
+          ],
         );
       await this.auditEvent(
         client,
@@ -1432,7 +1658,11 @@ class FinanceLedgerService {
         selectedScopes[0],
         'catalog.saved',
         id,
-        { kind, version },
+        {
+          kind,
+          version,
+          ...(kind === 'articles' ? { before: old || null, after: data } : {}),
+        },
       );
       const result = catalogRow(
         (
@@ -1461,12 +1691,15 @@ class FinanceLedgerService {
     state,
     key,
     correctionOfId = null,
+    preserveArticleSnapshot = null,
   ) {
+    if (Object.hasOwn(rawInput, 'data'))
+      invalid('Используйте плоские поля операции.');
     const input = aliases(rawInput);
     const scope = this.resolveScope(input, scopes, state);
     date(input.date);
     this.closed(state, scope, input.date);
-    this.references(input, scope, state);
+    this.references(input, scope, state, preserveArticleSnapshot);
     if (
       input.source &&
       /(?:^|[_:-])(demo|test)(?:$|[_:-])/i.test(input.source.system || '')
@@ -1570,6 +1803,7 @@ class FinanceLedgerService {
     }
     const context = {
       ...state,
+      preserveArticleSnapshot,
       allowCrossScopeSettlements:
         state.fullEntityIds?.includes(scope.legalEntityId) === true,
     };
@@ -1736,6 +1970,7 @@ class FinanceLedgerService {
       'kind',
       'directionId',
       'article',
+      'articleId',
       'description',
       'expectedDate',
       'plannedDate',
@@ -1820,6 +2055,20 @@ class FinanceLedgerService {
               }
             : undefined,
         };
+        if (
+          Object.hasOwn(body.patch, 'article') &&
+          !Object.hasOwn(body.patch, 'articleId') &&
+          body.patch.article !== original.article
+        )
+          replacement.articleId = null;
+        const preserveArticleSnapshot =
+          original.articleId &&
+          (!Object.hasOwn(body.patch, 'articleId') ||
+            body.patch.articleId === original.articleId) &&
+          (!Object.hasOwn(body.patch, 'article') ||
+            body.patch.article === original.article)
+            ? { articleId: original.articleId, article: original.article }
+            : null;
         delete replacement.reversesId;
         delete replacement.originalOperationId;
         delete replacement.createdAt;
@@ -1833,6 +2082,7 @@ class FinanceLedgerService {
           state,
           `${body.idempotencyKey}:replace:${original.id}`,
           original.id,
+          preserveArticleSnapshot,
         );
         if (
           ['bank', 'cash'].includes(original.source?.system) &&
@@ -2201,6 +2451,7 @@ class FinanceLedgerService {
         return require('../domain/finance-automation').applyFuelRules(
           row,
           state.catalogs,
+          state,
         );
       });
       if (existing) {
@@ -2534,6 +2785,7 @@ class FinanceLedgerService {
             },
             state,
           );
+          this.resolveCatalogArticle('plans', plan, state);
           const priorPlan = state.catalogs.find(
             (row) =>
               row.kind === 'plans' &&
@@ -2669,17 +2921,7 @@ class FinanceLedgerService {
           counterparties: catalog.filter((row) => row.kind === 'parties'),
           directions: catalog.filter((row) => row.kind === 'directions'),
           rules: catalog.filter((row) => row.kind === 'classification_rules'),
-          articles: [
-            ...new Set(
-              state.operations
-                .filter(
-                  (row) =>
-                    row.responsibilityScopeId === scope.responsibilityScopeId,
-                )
-                .map((row) => row.article)
-                .filter(Boolean),
-            ),
-          ],
+          articles: catalog.filter((row) => row.kind === 'articles'),
         };
         const rules = helpers.suggestionsFor(context);
         output.push(...rules);

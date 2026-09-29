@@ -141,6 +141,7 @@ const HEADERS = {
     '% ставка ндс',
   ],
   article: ['article', 'статья', 'статья расходов'],
+  articleId: ['articleid', 'article_id', 'ид статьи', 'id статьи'],
   status: ['status', 'статус', 'закр', '1с', 'отправлено в завгар'],
   sourceId: [
     'source_id',
@@ -375,6 +376,7 @@ function rowFromCells(cells, map, provenance, sourceType, date1904) {
     description,
     confirmation: 'provisional',
     article: text(get('article')),
+    ...(text(get('articleId')) ? { articleId: text(get('articleId')) } : {}),
     source: {
       system: sourceType,
       id:

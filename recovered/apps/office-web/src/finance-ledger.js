@@ -175,6 +175,118 @@ export function createFinanceLedgerWorkspace(
       ),
     );
   const empty = (message) => h('p', { className: 'fl-empty' }, message);
+  const articleCategories = [
+    { id: 'income', name: 'Доходы' },
+    { id: 'expense', name: 'Расходы' },
+    { id: 'other', name: 'Прочее' },
+  ];
+  const articleTargets = (catalogs, directionId, allocationRuleId) => {
+    const rule = list(catalogs?.allocationRules).find(
+      (item) => item.id === allocationRuleId,
+    );
+    return rule
+      ? list(rule.weights).map((item) => item.directionId)
+      : [directionId || '__unassigned__'];
+  };
+  const articleFits = (article, directions) =>
+    !list(article.directionIds).length ||
+    list(directions).every((id) => article.directionIds.includes(id));
+  const articleInContext = (article, contexts) =>
+    contexts.every(
+      (context) =>
+        (!context.legalEntityId ||
+          !article.legalEntityId ||
+          article.legalEntityId === context.legalEntityId ||
+          list(article.legalEntityIds).includes(context.legalEntityId)) &&
+        (!context.responsibilityScopeId ||
+          !list(article.responsibilityScopeIds).length ||
+          article.responsibilityScopeIds.includes(
+            context.responsibilityScopeId,
+          )),
+    );
+  const changeArticle = (draft, value) =>
+    value === undefined
+      ? draft
+      : { ...draft, articleId: value || null, article: '' };
+  function ArticleSelect({
+    label,
+    value,
+    legacy,
+    onChange,
+    catalogs,
+    directions = [],
+    contexts = [],
+    disabled,
+    emptyLabel = 'Не назначена',
+    required = false,
+  }) {
+    if (!value && KIND_LABELS[legacy]) legacy = '';
+    const selected = list(catalogs?.articles).find((item) => item.id === value);
+    const options = list(catalogs?.articles).filter(
+      (item) =>
+        (!item.archived &&
+          articleFits(item, directions) &&
+          articleInContext(item, contexts)) ||
+        item.id === value,
+    );
+    if (value && !selected)
+      options.unshift({
+        id: value,
+        name: legacy || 'Выбранная статья',
+        unavailable: true,
+      });
+    return field(
+      label,
+      h(
+        'select',
+        {
+          'aria-label': label,
+          value: value || (legacy ? '__legacy_article__' : ''),
+          disabled,
+          required,
+          onChange: (event) =>
+            onChange(
+              event.target.value === '__legacy_article__'
+                ? undefined
+                : event.target.value || null,
+            ),
+        },
+        h('option', { value: '' }, emptyLabel),
+        legacy &&
+          !value &&
+          h(
+            'option',
+            { value: '__legacy_article__' },
+            `${legacy} · без связи со справочником`,
+          ),
+        ...options.map((item) =>
+          h(
+            'option',
+            {
+              key: item.id,
+              value: item.id,
+              disabled: Boolean(
+                item.archived ||
+                  item.unavailable ||
+                  !articleFits(item, directions) ||
+                  !articleInContext(item, contexts),
+              ),
+            },
+            `${item.group ? `${item.group} / ` : ''}${item.name}${item.archived ? ' · архив' : !articleInContext(item, contexts) ? ' · другая компания или проект' : !articleFits(item, directions) ? ' · другое направление' : ''}`,
+          ),
+        ),
+      ),
+      selected?.archived
+        ? 'Архивная статья сохранена в этой записи. Для новой привязки выберите действующую.'
+        : selected && !articleInContext(selected, contexts)
+          ? 'Выберите статью, доступную для компании и проекта операции.'
+          : selected && !articleFits(selected, directions)
+            ? 'Выберите статью, применимую ко всем направлениям операции.'
+            : legacy && value && legacy !== selected?.name
+              ? `В учтённой операции: ${legacy}`
+              : undefined,
+    );
+  }
   const metric = (label, value, props = {}) =>
     h(
       'div',
@@ -383,13 +495,23 @@ export function createFinanceLedgerWorkspace(
                         null,
                         button(
                           row.label ||
-                            row.article ||
+                            (!row.articleId && KIND_LABELS[row.article]
+                              ? 'Без статьи'
+                              : row.article) ||
                             row.account ||
                             row.category ||
                             'Без статьи',
                           () => drill(row),
                           { className: 'fl-link', disabled: busy },
                         ),
+                        list(row.articleNames).some(
+                          (name) => name !== row.article,
+                        ) &&
+                          h(
+                            'small',
+                            null,
+                            `В документах: ${row.articleNames.join(', ')}`,
+                          ),
                       ),
                       ...(report === 'cf'
                         ? [
@@ -428,12 +550,14 @@ export function createFinanceLedgerWorkspace(
     const [draft, setDraft] = useState({
       directionId: item.directionId || '',
       article: item.article || '',
+      articleId: item.articleId || null,
       counterpartyId: item.counterpartyId || '',
       kind: item.kind,
     });
     canEdit = canEdit && !item.projected;
     const dirty =
       draft.directionId !== (item.directionId || '') ||
+      draft.articleId !== (item.articleId || null) ||
       draft.article !== (item.article || '') ||
       draft.counterpartyId !== (item.counterpartyId || '') ||
       draft.kind !== item.kind;
@@ -559,18 +683,23 @@ export function createFinanceLedgerWorkspace(
         'td',
         null,
         canEdit && !item.reversed && item.status !== 'reversed'
-          ? h('input', {
-              'aria-label': `Статья: ${item.description || item.id}`,
-              value: draft.article,
-              maxLength: 150,
+          ? h(ArticleSelect, {
+              label: `Статья: ${item.description || item.id}`,
+              contexts: [item],
+              value: draft.articleId,
+              legacy: draft.article,
+              catalogs,
+              directions: articleTargets(
+                catalogs,
+                draft.directionId,
+                item.allocationRuleId,
+              ),
               disabled: busy,
-              onChange: (event) =>
-                setDraft((value) => ({
-                  ...value,
-                  article: event.target.value,
-                })),
+              onChange: (value) => setDraft((old) => changeArticle(old, value)),
             })
-          : item.article || 'Не определено',
+          : !item.articleId && KIND_LABELS[item.article]
+            ? 'Не назначена'
+            : item.article || 'Не назначена',
       ),
       h('td', null, badge(item.reversed ? 'reversed' : item.status)),
       h(
@@ -588,6 +717,13 @@ export function createFinanceLedgerWorkspace(
                   {
                     version: item.version,
                     ...draft,
+                    ...((draft.articleId || null) ===
+                      (item.articleId || null) &&
+                    draft.article === (item.article || '')
+                      ? { articleId: undefined, article: undefined }
+                      : draft.articleId
+                        ? { article: undefined }
+                        : {}),
                     directionId: draft.directionId || null,
                     counterpartyId: draft.counterpartyId || null,
                   },
@@ -704,7 +840,26 @@ export function createFinanceLedgerWorkspace(
             list(data.catalogs?.directions).filter((item) => !item.archived),
             'Не менять',
           ),
-          text('Статья для выбранных', bulkArticle, setBulkArticle),
+          h(ArticleSelect, {
+            label: 'Статья для выбранных',
+            contexts: selectedItems,
+            value: bulkArticle,
+            onChange: (value) => setBulkArticle(value || ''),
+            catalogs: data.catalogs,
+            directions: [
+              ...new Set(
+                selectedItems.flatMap((item) =>
+                  articleTargets(
+                    data.catalogs,
+                    bulkDirection || item.directionId,
+                    item.allocationRuleId,
+                  ),
+                ),
+              ),
+            ],
+            emptyLabel: 'Не менять',
+            disabled: busy,
+          }),
           button(
             'Применить к выбранным',
             async () => {
@@ -715,9 +870,7 @@ export function createFinanceLedgerWorkspace(
                 })),
                 patch: {
                   ...(bulkDirection ? { directionId: bulkDirection } : {}),
-                  ...(bulkArticle.trim()
-                    ? { article: bulkArticle.trim() }
-                    : {}),
+                  ...(bulkArticle.trim() ? { articleId: bulkArticle } : {}),
                 },
               });
               if (result) {
@@ -1705,6 +1858,7 @@ export function createFinanceLedgerWorkspace(
         cashAccountId: '',
         toCashAccountId: '',
         article: '',
+        articleId: null,
         description: '',
         dueDate: '',
         plannedDate: '',
@@ -1739,6 +1893,7 @@ export function createFinanceLedgerWorkspace(
       };
     });
     const [localError, setLocalError] = useState('');
+    const [quickArticle, setQuickArticle] = useState(null);
     const update = (key) => (value) =>
       setDraft((old) => ({ ...old, [key]: value }));
     const importedCash =
@@ -1798,10 +1953,29 @@ export function createFinanceLedgerWorkspace(
       (item) => item.legalEntityId === draft.legalEntityId,
     );
     const fuel = draft.kind.startsWith('fuel_');
+    const articleRequired =
+      !operation &&
+      [
+        'sale',
+        'expense',
+        'fuel_sale',
+        'fuel_own_consumption',
+        'inventory_consumption',
+        'interest',
+        'depreciation',
+      ].includes(draft.kind);
+    const inheritedArticle =
+      draft.kind === 'expense' &&
+      list(catalogs.allocationRules).find(
+        (item) => item.id === draft.allocationRuleId,
+      )?.articleId;
+
     async function submit(event) {
       event.preventDefault();
       setLocalError('');
       try {
+        if (articleRequired && !draft.articleId && !inheritedArticle)
+          throw new Error('Выберите статью из справочника или добавьте новую.');
         const { amount, vatAmount, cost, costVat, ...values } = draft;
         const body = {
           ...values,
@@ -1818,6 +1992,21 @@ export function createFinanceLedgerWorkspace(
         };
         for (const key of Object.keys(body))
           if (body[key] === '') delete body[key];
+        if (
+          operation &&
+          (draft.articleId || null) === (operation.articleId || null) &&
+          draft.article === (operation.article || '')
+        ) {
+          delete body.articleId;
+          delete body.article;
+        } else if (body.articleId) delete body.article;
+        else if (operation) {
+          body.articleId = null;
+          body.article = '';
+        } else if (inheritedArticle && !draft.articleId && !draft.article) {
+          delete body.articleId;
+          delete body.article;
+        }
         if (operation) {
           delete body.legalEntityId;
           delete body.responsibilityScopeId;
@@ -1908,9 +2097,28 @@ export function createFinanceLedgerWorkspace(
           'Не определено',
           { disabled: busy },
         ),
-        text('Статья', draft.article, update('article'), {
-          maxLength: 150,
+        h(ArticleSelect, {
+          label: 'Статья',
+          contexts: [
+            {
+              ...draft,
+              responsibilityScopeId:
+                draft.responsibilityScopeId ||
+                list(catalogs.accounts).find(
+                  (item) => item.id === draft.cashAccountId,
+                )?.responsibilityScopeId,
+            },
+          ],
+          value: draft.articleId,
+          legacy: draft.article,
+          catalogs,
+          directions: articleTargets(
+            catalogs,
+            draft.directionId,
+            draft.allocationRuleId,
+          ),
           disabled: busy,
+          onChange: (value) => setDraft((old) => changeArticle(old, value)),
         }),
         select(
           'Подтверждение операции',
@@ -2007,6 +2215,108 @@ export function createFinanceLedgerWorkspace(
           disabled: busy,
         }),
       ),
+      h(
+        'div',
+        { className: 'fl-toolbar' },
+        button(
+          '+ Статья',
+          () => setQuickArticle({ name: '', category: 'other', group: '' }),
+          { disabled: busy || !draft.legalEntityId },
+        ),
+        !draft.articleId &&
+          !draft.article &&
+          h(
+            'span',
+            { className: 'muted' },
+            articleRequired
+              ? inheritedArticle
+                ? 'Статья будет взята из правила распределения.'
+                : 'Для начисления выберите статью или добавьте новую.'
+              : 'Статья не назначена. Операция останется без классификации по справочнику.',
+          ),
+      ),
+      quickArticle &&
+        h(
+          'fieldset',
+          { className: 'fl-catalog-form', disabled: busy },
+          h('legend', null, 'Новая статья'),
+          h(
+            'div',
+            { className: 'fl-form-grid' },
+            text(
+              'Название новой статьи',
+              quickArticle.name,
+              (value) => setQuickArticle((old) => ({ ...old, name: value })),
+              { maxLength: 200, disabled: busy },
+            ),
+            select(
+              'Тип новой статьи',
+              quickArticle.category,
+              (value) =>
+                setQuickArticle((old) => ({ ...old, category: value })),
+              articleCategories,
+              null,
+              { disabled: busy },
+            ),
+            text(
+              'Группа новой статьи',
+              quickArticle.group,
+              (value) => setQuickArticle((old) => ({ ...old, group: value })),
+              { maxLength: 120, disabled: busy },
+            ),
+          ),
+          h(
+            'p',
+            { className: 'fl-note' },
+            'Статья будет доступна для всех направлений. Применимость можно уточнить в справочнике. Заполненная операция сохранится в форме.',
+          ),
+          h(
+            'div',
+            { className: 'fl-toolbar' },
+            button(
+              'Добавить статью в справочник',
+              async () => {
+                setLocalError('');
+                if (!quickArticle.name.trim()) {
+                  setLocalError('Введите название статьи.');
+                  return;
+                }
+                const result = await save(
+                  '/catalogs/articles',
+                  {
+                    name: quickArticle.name.trim(),
+                    category: quickArticle.category,
+                    group: quickArticle.group.trim(),
+                    directionIds: [],
+                    version: 0,
+                    legalEntityId: draft.legalEntityId,
+                    legalEntityIds: entities.map((item) => item.id),
+                    responsibilityScopeIds: [
+                      ...new Set(
+                        list(data.context?.scopes).map(
+                          (scope) => scope.responsibilityScopeId,
+                        ),
+                      ),
+                    ],
+                  },
+                  'PUT',
+                );
+                if (result) {
+                  setDraft((old) => ({
+                    ...old,
+                    articleId: result.id,
+                    article: result.name,
+                  }));
+                  setQuickArticle(null);
+                }
+              },
+              { disabled: busy },
+            ),
+            button('Отмена добавления статьи', () => setQuickArticle(null), {
+              disabled: busy,
+            }),
+          ),
+        ),
       localError &&
         h('p', { role: 'alert', className: 'fl-error' }, localError),
       importedCash &&
@@ -2056,6 +2366,14 @@ export function createFinanceLedgerWorkspace(
         h('dd', null, dateLabel(operation.date)),
         h('dt', null, 'Сумма'),
         h('dd', null, money(operation.amountKopecks)),
+        h('dt', null, 'Статья в документе'),
+        h(
+          'dd',
+          null,
+          !operation.articleId && KIND_LABELS[operation.article]
+            ? 'Не назначена'
+            : operation.article || 'Не назначена',
+        ),
         h('dt', null, 'Источник'),
         h('dd', null, source.system || operation.sourceSystem || 'Ручной ввод'),
         h('dt', null, 'Документ источника'),
@@ -2281,12 +2599,18 @@ export function createFinanceLedgerWorkspace(
     const [draft, setDraft] = useState(null),
       [weights, setWeights] = useState({}),
       [error, setError] = useState('');
+    const [articleSearch, setArticleSearch] = useState(''),
+      [articleState, setArticleState] = useState('active'),
+      [articleCategory, setArticleCategory] = useState(''),
+      [articleGroup, setArticleGroup] = useState(''),
+      [articleDirection, setArticleDirection] = useState('');
     useEffect(() => {
       setDraft(null);
       setError('');
     }, [kind]);
     const labels = {
       companies: 'Свои компании',
+      articles: 'Статьи',
       counterparties: 'Контрагенты',
       directions: 'Направления',
       accounts: 'Счета и кассы',
@@ -2301,7 +2625,18 @@ export function createFinanceLedgerWorkspace(
       ).filter(
         (item) =>
           (kind !== 'plans' || item.recurrence) &&
-          (kind !== 'directions' || !item.system),
+          (kind !== 'directions' || !item.system) &&
+          (kind !== 'articles' ||
+            ((articleState === 'all' ||
+              Boolean(item.archived) === (articleState === 'archived')) &&
+              (!articleCategory || item.category === articleCategory) &&
+              (!articleGroup || item.group === articleGroup) &&
+              (!articleDirection || articleFits(item, [articleDirection])) &&
+              (!articleSearch ||
+                [item.name, item.code, item.group, item.description]
+                  .join(' ')
+                  .toLocaleLowerCase('ru')
+                  .includes(articleSearch.toLocaleLowerCase('ru'))))),
       ),
       entities = list(data.context?.legalEntities);
     const canEdit =
@@ -2317,6 +2652,22 @@ export function createFinanceLedgerWorkspace(
       setDraft((old) => ({ ...old, [key]: value }));
     function edit(item = {}) {
       setError('');
+      if (kind === 'articles') {
+        setDraft({
+          ...(item.id ? { id: item.id } : {}),
+          version: item.version || 0,
+          name: item.name || '',
+          code: item.code || '',
+          category: item.category || 'other',
+          group: item.group || '',
+          description: item.description || '',
+          directionIds: list(item.directionIds),
+          allDirections: !list(item.directionIds).length,
+          legalEntityId:
+            item.legalEntityId || legalEntityId || entities[0]?.id || '',
+        });
+        return;
+      }
       if (kind === 'companies') {
         setDraft({
           ...(item.id ? { id: item.id } : {}),
@@ -2385,6 +2736,7 @@ export function createFinanceLedgerWorkspace(
           ? {
               accrualEnabled: true,
               article: item.accrual.article,
+              articleId: item.accrual.articleId,
               accrualVat: String((item.accrual.vatKopecks || 0) / 100),
             }
           : {}),
@@ -2404,6 +2756,37 @@ export function createFinanceLedgerWorkspace(
     async function submit(event) {
       event.preventDefault();
       setError('');
+      if (kind === 'articles') {
+        if (!draft.allDirections && !draft.directionIds.length) {
+          setError(
+            'Выберите хотя бы одно направление или разрешите статью для всех направлений.',
+          );
+          return;
+        }
+        const { allDirections, ...fields } = draft;
+        const result = await save(
+          '/catalogs/articles',
+          {
+            ...fields,
+            name: draft.name.trim(),
+            code: draft.code.trim(),
+            group: draft.group.trim(),
+            description: draft.description.trim(),
+            directionIds: allDirections ? [] : draft.directionIds,
+            legalEntityIds: entities.map((item) => item.id),
+            responsibilityScopeIds: [
+              ...new Set(
+                list(data.context?.scopes).map(
+                  (scope) => scope.responsibilityScopeId,
+                ),
+              ),
+            ],
+          },
+          'PUT',
+        );
+        if (result) setDraft(null);
+        return;
+      }
       if (kind === 'companies') {
         const company = {
           ...draft,
@@ -2468,13 +2851,15 @@ export function createFinanceLedgerWorkspace(
           if (draft.accrualEnabled)
             body.accrual = {
               kind: 'expense',
-              article: draft.article,
+              ...(draft.articleId
+                ? { articleId: draft.articleId }
+                : { article: draft.article }),
               vatKopecks:
                 draft.accrualVat && Number(draft.accrualVat) !== 0
                   ? kopecks(draft.accrualVat)
                   : 0,
             };
-          else delete body.accrual;
+          else body.accrual = null;
         }
       } catch (reason) {
         setError(reason.message);
@@ -2528,6 +2913,7 @@ export function createFinanceLedgerWorkspace(
       }
       for (const key of Object.keys(body))
         if (body[key] === '') delete body[key];
+      if (draft.articleId === null && draft.article === '') body.article = '';
       const result = await save(`/catalogs/${kind}`, body, 'PUT');
       if (result) setDraft(null);
     }
@@ -2553,11 +2939,75 @@ export function createFinanceLedgerWorkspace(
         ),
         canEdit &&
           button(
-            kind === 'companies' ? 'Добавить компанию' : 'Добавить запись',
+            kind === 'companies'
+              ? 'Добавить компанию'
+              : kind === 'articles'
+                ? 'Добавить статью'
+                : 'Добавить запись',
             () => edit(),
             { disabled: busy },
           ),
       ),
+      kind === 'articles' &&
+        h(
+          React.Fragment,
+          null,
+          h(
+            'p',
+            { className: 'muted' },
+            'Статья описывает назначение операции. Тип и группа помогают найти её в справочнике и не меняют вид операции или способ расчёта прибыли. Применимость разрешает выбор статьи; распределение расходов задаётся отдельно.',
+          ),
+          h(
+            'div',
+            { className: 'fl-toolbar' },
+            text('Поиск статей', articleSearch, setArticleSearch, {
+              type: 'search',
+              placeholder: 'Название, код или описание',
+            }),
+            select(
+              'Состояние статей',
+              articleState,
+              setArticleState,
+              [
+                { id: 'active', name: 'Действующие' },
+                { id: 'archived', name: 'Архив' },
+                { id: 'all', name: 'Все' },
+              ],
+              null,
+            ),
+            select(
+              'Тип статей',
+              articleCategory,
+              setArticleCategory,
+              articleCategories,
+              'Все типы',
+            ),
+            select(
+              'Группа статей',
+              articleGroup,
+              setArticleGroup,
+              [
+                ...new Set(
+                  list(data.catalogs?.articles)
+                    .map((item) => item.group)
+                    .filter(Boolean),
+                ),
+              ]
+                .sort()
+                .map((name) => ({ id: name, name })),
+              'Все группы',
+            ),
+            select(
+              'Применимость статей',
+              articleDirection,
+              setArticleDirection,
+              list(data.catalogs?.directions).filter(
+                (item) => item.id !== '__unassigned__' && !item.archived,
+              ),
+              'Все направления',
+            ),
+          ),
+        ),
       kind === 'companies' &&
         h(
           'p',
@@ -2645,7 +3095,7 @@ export function createFinanceLedgerWorkspace(
               maxLength: 200,
               disabled: busy,
             }),
-            kind !== 'companies' &&
+            !['companies', 'articles'].includes(kind) &&
               select(
                 'Компания записи',
                 draft.legalEntityId,
@@ -2653,6 +3103,81 @@ export function createFinanceLedgerWorkspace(
                 entities,
                 'Выберите компанию',
                 { required: true, disabled: busy },
+              ),
+            kind === 'articles' &&
+              h(
+                React.Fragment,
+                null,
+                text('Код статьи', draft.code, update('code'), {
+                  maxLength: 60,
+                  disabled: busy,
+                }),
+                select(
+                  'Тип статьи',
+                  draft.category,
+                  update('category'),
+                  articleCategories,
+                  null,
+                  { disabled: busy },
+                ),
+                text('Группа статьи', draft.group, update('group'), {
+                  maxLength: 120,
+                  disabled: busy,
+                }),
+                text(
+                  'Описание статьи',
+                  draft.description,
+                  update('description'),
+                  { maxLength: 2000, disabled: busy },
+                ),
+                h(
+                  'fieldset',
+                  { className: 'fl-role-options', disabled: busy },
+                  h('legend', null, 'Применимость статьи'),
+                  h(
+                    'label',
+                    { className: 'fl-check' },
+                    h('input', {
+                      type: 'checkbox',
+                      checked: draft.allDirections,
+                      onChange: (event) =>
+                        update('allDirections')(event.target.checked),
+                    }),
+                    'Для всех направлений',
+                  ),
+                  !draft.allDirections &&
+                    list(data.catalogs?.directions)
+                      .filter(
+                        (item) =>
+                          item.id !== '__unassigned__' &&
+                          (!item.archived ||
+                            draft.directionIds.includes(item.id)),
+                      )
+                      .map((item) =>
+                        h(
+                          'label',
+                          { key: item.id, className: 'fl-check' },
+                          h('input', {
+                            type: 'checkbox',
+                            checked: draft.directionIds.includes(item.id),
+                            onChange: (event) =>
+                              update('directionIds')(
+                                event.target.checked
+                                  ? [...draft.directionIds, item.id]
+                                  : draft.directionIds.filter(
+                                      (id) => id !== item.id,
+                                    ),
+                              ),
+                          }),
+                          itemName(item),
+                        ),
+                      ),
+                ),
+                h(
+                  'p',
+                  { className: 'fl-note' },
+                  'Выбор нескольких направлений не делит сумму. Прямой расход остаётся полностью в направлении операции, пока не выбрано отдельное правило распределения.',
+                ),
               ),
             kind === 'companies' &&
               h(
@@ -2854,6 +3379,17 @@ export function createFinanceLedgerWorkspace(
                   'Выберите направление',
                   { required: draft.ruleType === 'fuel', disabled: busy },
                 ),
+                h(ArticleSelect, {
+                  label: 'Статья по правилу',
+                  contexts: [draft],
+                  value: draft.articleId,
+                  legacy: draft.article,
+                  catalogs: data.catalogs,
+                  directions: [draft.directionId || '__unassigned__'],
+                  onChange: (value) =>
+                    setDraft((old) => changeArticle(old, value)),
+                  disabled: busy,
+                }),
                 text(
                   'Действует с',
                   draft.effectiveFrom,
@@ -2872,12 +3408,6 @@ export function createFinanceLedgerWorkspace(
                         'В назначении содержится',
                         draft.contains,
                         update('contains'),
-                        { disabled: busy },
-                      ),
-                      text(
-                        'Статья по правилу',
-                        draft.article,
-                        update('article'),
                         { disabled: busy },
                       ),
                     )
@@ -3097,12 +3627,22 @@ export function createFinanceLedgerWorkspace(
                   h(
                     React.Fragment,
                     null,
-                    text(
-                      'Статья начисления',
-                      draft.article,
-                      update('article'),
-                      { required: true, disabled: busy },
-                    ),
+                    h(ArticleSelect, {
+                      label: 'Статья начисления',
+                      contexts: [draft],
+                      value: draft.articleId,
+                      legacy: draft.article,
+                      catalogs: data.catalogs,
+                      directions: articleTargets(
+                        data.catalogs,
+                        draft.directionId,
+                        draft.allocationRuleId,
+                      ),
+                      onChange: (value) =>
+                        setDraft((old) => changeArticle(old, value)),
+                      disabled: busy,
+                      required: true,
+                    }),
                     text(
                       'НДС регулярного расхода, ₽',
                       draft.accrualVat,
@@ -3121,12 +3661,20 @@ export function createFinanceLedgerWorkspace(
                   update('effectiveFrom'),
                   { type: 'date', required: true, disabled: busy },
                 ),
-                text(
-                  'Статья общих расходов',
-                  draft.article,
-                  update('article'),
-                  { required: true, disabled: busy },
-                ),
+                h(ArticleSelect, {
+                  label: 'Статья общих расходов',
+                  contexts: [draft],
+                  value: draft.articleId,
+                  legacy: draft.article,
+                  catalogs: data.catalogs,
+                  directions: Object.entries(weights)
+                    .filter(([, value]) => Number(value) > 0)
+                    .map(([id]) => id),
+                  onChange: (value) =>
+                    setDraft((old) => changeArticle(old, value)),
+                  disabled: busy,
+                  required: true,
+                }),
                 ...list(data.catalogs?.directions)
                   .filter((item) => !item.archived && !item.system)
                   .map((item) =>
@@ -3153,77 +3701,157 @@ export function createFinanceLedgerWorkspace(
             h(
               'button',
               { type: 'submit', className: 'button', disabled: busy },
-              kind === 'companies' ? 'Сохранить компанию' : 'Сохранить запись',
+              kind === 'companies'
+                ? 'Сохранить компанию'
+                : kind === 'articles'
+                  ? 'Сохранить статью'
+                  : 'Сохранить запись',
             ),
             button('Отмена', () => setDraft(null), { disabled: busy }),
           ),
         ),
-      items.length
-        ? table(
-            labels[kind],
-            kind === 'companies'
-              ? ['Название', 'Реквизиты', 'Тип', '']
-              : ['Название', 'Реквизиты / условия', 'Состояние', ''],
-            items.map((item) =>
-              h(
-                'tr',
-                { key: item.id },
-                h('td', null, itemName(item)),
+      kind === 'articles'
+        ? items.length
+          ? table(
+              'Статьи',
+              [
+                'Статья / код',
+                'Тип',
+                'Группа',
+                'Применимость',
+                'Состояние',
+                '',
+              ],
+              items.map((item) =>
                 h(
-                  'td',
-                  null,
-                  kind === 'allocationRules'
-                    ? `${item.article || 'Все общие расходы'} · с ${dateLabel(item.effectiveFrom)}`
-                    : [
-                        item.inn,
-                        item.kpp,
-                        item.bankAccount,
-                        kind === 'accounts' &&
-                          (item.type === 'cash' ? 'Касса' : 'Банк'),
-                      ]
-                        .filter(Boolean)
-                        .join(' · ') || '—',
-                ),
-                h(
-                  'td',
-                  null,
-                  kind === 'companies'
-                    ? {
-                        legal_entity: 'Юридическое лицо',
-                        sole_proprietor: 'ИП',
-                      }[item.organizationKind] || 'Тип не указан'
-                    : item.archived
-                      ? 'Архив'
-                      : 'Действует',
-                ),
-                h(
-                  'td',
-                  null,
-                  canEdit &&
-                    (kind === 'companies'
-                      ? item.canEdit === true
-                      : item.canEdit !== false) &&
-                    h(
-                      'div',
-                      { className: 'fl-row-actions' },
-                      button('Изменить', () => edit(item), { disabled: busy }),
-                      kind !== 'companies' &&
+                  'tr',
+                  { key: item.id, 'data-article-id': item.id },
+                  h(
+                    'td',
+                    null,
+                    h('strong', null, item.name),
+                    item.code && h('small', null, item.code),
+                    item.description && h('small', null, item.description),
+                  ),
+                  h(
+                    'td',
+                    null,
+                    articleCategories.find(
+                      (category) => category.id === item.category,
+                    )?.name || 'Прочее',
+                  ),
+                  h('td', null, item.group || 'Без группы'),
+                  h(
+                    'td',
+                    null,
+                    list(item.directionIds).length
+                      ? item.directionIds
+                          .map((id) =>
+                            itemName(
+                              list(data.catalogs?.directions).find(
+                                (direction) => direction.id === id,
+                              ),
+                            ),
+                          )
+                          .join(', ')
+                      : 'Все направления',
+                  ),
+                  h('td', null, item.archived ? 'Архив' : 'Действует'),
+                  h(
+                    'td',
+                    null,
+                    canEdit &&
+                      item.canEdit !== false &&
+                      h(
+                        'div',
+                        { className: 'fl-row-actions' },
+                        button('Изменить', () => edit(item), {
+                          disabled: busy,
+                        }),
                         button(
                           item.archived ? 'Восстановить' : 'В архив',
                           () =>
                             save(
-                              `/catalogs/${kind}`,
+                              '/catalogs/articles',
                               { ...item, archived: !item.archived },
                               'PUT',
                             ),
                           { disabled: busy },
                         ),
-                    ),
+                      ),
+                  ),
                 ),
               ),
-            ),
-          )
-        : empty('Записей пока нет.'),
+            )
+          : empty('Нет статей по выбранным условиям.')
+        : items.length
+          ? table(
+              labels[kind],
+              kind === 'companies'
+                ? ['Название', 'Реквизиты', 'Тип', '']
+                : ['Название', 'Реквизиты / условия', 'Состояние', ''],
+              items.map((item) =>
+                h(
+                  'tr',
+                  { key: item.id },
+                  h('td', null, itemName(item)),
+                  h(
+                    'td',
+                    null,
+                    kind === 'allocationRules'
+                      ? `${item.article || 'Все общие расходы'} · с ${dateLabel(item.effectiveFrom)}`
+                      : [
+                          item.inn,
+                          item.kpp,
+                          item.bankAccount,
+                          kind === 'accounts' &&
+                            (item.type === 'cash' ? 'Касса' : 'Банк'),
+                        ]
+                          .filter(Boolean)
+                          .join(' · ') || '—',
+                  ),
+                  h(
+                    'td',
+                    null,
+                    kind === 'companies'
+                      ? {
+                          legal_entity: 'Юридическое лицо',
+                          sole_proprietor: 'ИП',
+                        }[item.organizationKind] || 'Тип не указан'
+                      : item.archived
+                        ? 'Архив'
+                        : 'Действует',
+                  ),
+                  h(
+                    'td',
+                    null,
+                    canEdit &&
+                      (kind === 'companies'
+                        ? item.canEdit === true
+                        : item.canEdit !== false) &&
+                      h(
+                        'div',
+                        { className: 'fl-row-actions' },
+                        button('Изменить', () => edit(item), {
+                          disabled: busy,
+                        }),
+                        kind !== 'companies' &&
+                          button(
+                            item.archived ? 'Восстановить' : 'В архив',
+                            () =>
+                              save(
+                                `/catalogs/${kind}`,
+                                { ...item, archived: !item.archived },
+                                'PUT',
+                              ),
+                            { disabled: busy },
+                          ),
+                      ),
+                  ),
+                ),
+              ),
+            )
+          : empty('Записей пока нет.'),
     );
   }
 
@@ -3234,6 +3862,7 @@ export function createFinanceLedgerWorkspace(
     data,
     busy,
     duplicateConflict,
+    legalEntityId,
   }) {
     const key = row.rowNumber,
       operation = row.operation || {},
@@ -3247,7 +3876,8 @@ export function createFinanceLedgerWorkspace(
       operation.kind === 'cash_in'
         ? ['cash_in', 'payment_in', 'customer_advance']
         : ['cash_out', 'payment_out', 'supplier_advance'];
-    const current = (name) => values[name] ?? operation[name] ?? '';
+    const current = (name) =>
+      values[name] !== undefined ? values[name] : (operation[name] ?? '');
     const update = (name) => (value) => override(key, name, value);
     const monetary = (label, name, property) =>
       text(
@@ -3289,8 +3919,28 @@ export function createFinanceLedgerWorkspace(
         }),
         monetary('Сумма', 'amountText', 'amountKopecks'),
         monetary('НДС', 'vatText', 'vatKopecks'),
-        text(`Статья строки ${key}`, current('article'), update('article'), {
+        h(ArticleSelect, {
+          label: `Статья строки ${key}`,
+          contexts: [
+            {
+              legalEntityId,
+              responsibilityScopeId: current('responsibilityScopeId'),
+            },
+          ],
+          value: current('articleId'),
+          legacy: current('article'),
+          catalogs: data.catalogs,
+          directions: articleTargets(
+            data.catalogs,
+            current('directionId'),
+            current('allocationRuleId'),
+          ),
           disabled: busy,
+          onChange: (value) => {
+            if (value === undefined) return;
+            override(key, 'articleId', value);
+            override(key, 'article', '');
+          },
         }),
         text(
           `Плановая дата строки ${key}`,
@@ -3657,6 +4307,31 @@ export function createFinanceLedgerWorkspace(
                 'Не менять',
                 { disabled: busy },
               ),
+              h(ArticleSelect, {
+                label: 'Статья выбранных строк',
+                contexts: [{ legalEntityId: entity }],
+                value: bulk.articleId,
+                onChange: bulkChange('articleId'),
+                catalogs: data.catalogs,
+                directions: [
+                  ...new Set(
+                    rows
+                      .filter((row) => selected.includes(row.rowNumber))
+                      .flatMap((row) =>
+                        articleTargets(
+                          data.catalogs,
+                          bulk.directionId ||
+                            overrides[row.rowNumber]?.directionId ||
+                            row.operation?.directionId,
+                          overrides[row.rowNumber]?.allocationRuleId ||
+                            row.operation?.allocationRuleId,
+                        ),
+                      ),
+                  ),
+                ],
+                emptyLabel: 'Не менять',
+                disabled: busy,
+              }),
               scopes.length > 1 &&
                 select(
                   'Проект выбранных строк',
@@ -3789,6 +4464,7 @@ export function createFinanceLedgerWorkspace(
                       null,
                       h(ImportCorrections, {
                         row,
+                        legalEntityId: entity,
                         values,
                         override,
                         data,
@@ -3979,6 +4655,8 @@ export function createFinanceLedgerWorkspace(
       status: 'planned',
       counterpartyId: '',
       directionId: '',
+      articleId: null,
+      article: '',
       cashAccountId: '',
       documentId: '',
       responsibilityScopeId: '',
@@ -4073,6 +4751,16 @@ export function createFinanceLedgerWorkspace(
           'Не назначено',
           { disabled: busy },
         ),
+        h(ArticleSelect, {
+          label: 'Статья плана',
+          contexts: [draft],
+          value: draft.articleId,
+          legacy: draft.article,
+          catalogs: data.catalogs,
+          directions: [draft.directionId || '__unassigned__'],
+          onChange: (value) => setDraft((old) => changeArticle(old, value)),
+          disabled: busy,
+        }),
         select(
           'Счёт плана',
           draft.cashAccountId,
@@ -4432,6 +5120,7 @@ export function createFinanceLedgerWorkspace(
       [selected, setSelected] = useState([]),
       [search, setSearch] = useState(''),
       [article, setArticle] = useState(''),
+      [articleId, setArticleId] = useState(''),
       [dialog, setDialog] = useState(null);
     const [searchQuery, setSearchQuery] = useState('');
     useEffect(() => {
@@ -4471,9 +5160,11 @@ export function createFinanceLedgerWorkspace(
         offset: String(offset),
         limit: '50',
         ...(searchQuery ? { search: searchQuery } : {}),
-        ...(article
-          ? { [report === 'balance' ? 'account' : 'article']: article }
-          : {}),
+        ...(articleId
+          ? { articleId }
+          : article
+            ? { [report === 'balance' ? 'account' : 'article']: article }
+            : {}),
       });
       request(`/finance/ledger?${query}`, { signal: controller.signal }, token)
         .then((value) => {
@@ -4503,6 +5194,7 @@ export function createFinanceLedgerWorkspace(
       refresh,
       view,
       article,
+      articleId,
       searchQuery,
       calendarFilters.calendarFrom,
       calendarFilters.calendarTo,
@@ -4559,6 +5251,7 @@ export function createFinanceLedgerWorkspace(
       setCalendarOffset(0);
       setSelected([]);
       setArticle('');
+      setArticleId('');
     }
     async function source(item, mode = 'source') {
       setDialog({ type: mode, item });
@@ -4621,6 +5314,14 @@ export function createFinanceLedgerWorkspace(
         h(
           'div',
           { className: 'fl-toolbar' },
+          button(
+            'Статьи',
+            () => {
+              setCatalogKind('articles');
+              setView('catalogs');
+            },
+            { disabled: !data || locked },
+          ),
           button(
             'Свои компании',
             () => {
@@ -4761,12 +5462,14 @@ export function createFinanceLedgerWorkspace(
                     setReport: (value) => {
                       setReport(value);
                       setArticle('');
+                      setArticleId('');
                       setOffset(0);
                     },
                     busy: locked,
                     act: (type) => setDialog({ type }),
                     drill: (row) => {
                       setArticle(row.article || row.account || '');
+                      setArticleId(row.articleId || '');
                       setOffset(0);
                       setTab('operations');
                     },
@@ -4784,7 +5487,10 @@ export function createFinanceLedgerWorkspace(
                     search,
                     setSearch,
                     article,
-                    setArticle,
+                    setArticle: (value) => {
+                      setArticle(value);
+                      if (!value) setArticleId('');
+                    },
                   }),
                 tab === 'calendar' &&
                   h(Calendar, {
