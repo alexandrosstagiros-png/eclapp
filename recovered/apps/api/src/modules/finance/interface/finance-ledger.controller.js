@@ -33,6 +33,9 @@ class FinanceLedgerController {
   catalog(actor, kind, body) {
     return this.service.saveCatalog(actor, kind, body);
   }
+  company(actor, body) {
+    return this.service.saveCompany(actor, body);
+  }
   operation(actor, body) {
     return this.service.createOperation(actor, body);
   }
@@ -89,6 +92,7 @@ for (const [name, route] of [
   ['snapshot', Get()],
   ['detail', Get('operations/:id')],
   ['catalog', Put('catalogs/:kind')],
+  ['company', Put('companies')],
   ['operation', Post('operations')],
   ['settlement', Post('settlements')],
   ['bulk', Post('operations/bulk')],

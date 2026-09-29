@@ -29,7 +29,7 @@ async function seed() {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(917042002)");
     await client.query(
-      "INSERT INTO legal_entities VALUES($1,$2) ON CONFLICT DO NOTHING",
+      "INSERT INTO legal_entities(id,name) VALUES($1,$2) ON CONFLICT DO NOTHING",
       [ids.legal, "Демо Транспорт"],
     );
     await client.query(

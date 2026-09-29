@@ -274,6 +274,19 @@ function closureRow(row) {
     reopenedAt: row.reopened_at,
   };
 }
+function companyRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    organizationKind: row.organization_kind,
+    inn: row.inn,
+    kpp: row.kpp,
+    ogrn: row.ogrn,
+    fullName: row.full_name,
+    address: row.address,
+    version: row.version,
+  };
+}
 
 class FinanceLedgerService {
   constructor(database, identity, audit, neural) {
@@ -330,6 +343,7 @@ class FinanceLedgerService {
       canEdit: actor.role !== 'auditor',
       canClose: ['access_admin', 'document_specialist'].includes(actor.role),
       canReopen: actor.role === 'access_admin',
+      canManageCompanies: actor.role === 'access_admin' && !actor.impersonation,
     };
   }
   async context(client, actor, scopes) {
@@ -340,13 +354,22 @@ class FinanceLedgerService {
         [ids],
       )
     ).rows;
-    const legalEntities = ids.map((id) => ({
-      id,
-      name: scopes.find((scope) => scope.legalEntityId === id).legalEntityName,
-      complete:
+    const companies = (
+      await client.query(
+        'SELECT * FROM legal_entities WHERE id=ANY($1::uuid[])',
+        [ids],
+      )
+    ).rows;
+    const legalEntities = ids.map((id) => {
+      const complete =
         scopes.filter((scope) => scope.legalEntityId === id).length ===
-        totals.find((row) => row.id === id)?.count,
-    }));
+        totals.find((row) => row.id === id)?.count;
+      return {
+        ...companyRow(companies.find((row) => row.id === id)),
+        complete,
+        canEdit: this.permissions(actor).canManageCompanies && complete,
+      };
+    });
     return {
       legalEntities,
       scopes,
@@ -909,6 +932,177 @@ class FinanceLedgerService {
       ],
     );
     return value;
+  }
+  async saveCompany(supplied, body) {
+    object(body);
+    return this.transaction(supplied, true, async (client, actor, scopes) => {
+      // Company creation also grants access. Follow access administration's
+      // stricter rule: impersonated sessions never manage these identities.
+      if (!this.permissions(actor).canManageCompanies) forbidden();
+      const replay = await this.replay(
+        client,
+        actor,
+        scopes,
+        body.idempotencyKey,
+        body,
+        'company.save',
+      );
+      if (replay) return replay;
+      const id = body.id ? uuid(body.id) : randomUUID();
+      let previous = null;
+      let affectedScopes = scopes.filter((scope) => scope.legalEntityId === id);
+      if (body.id) {
+        if (!affectedScopes.length) missing();
+        const stored = (
+          await client.query(
+            'SELECT * FROM legal_entities WHERE id=$1 FOR UPDATE',
+            [id],
+          )
+        ).rows[0];
+        if (!stored) missing();
+        const total = (
+          await client.query(
+            'SELECT count(rs.id)::integer AS count FROM projects p JOIN responsibility_scopes rs ON rs.project_id=p.id WHERE p.legal_entity_id=$1',
+            [id],
+          )
+        ).rows[0].count;
+        if (affectedScopes.length !== total) forbidden();
+        previous = companyRow(stored);
+      }
+      if ((previous?.version || 0) !== boundedInteger(body.version, 0))
+        conflict(
+          'Реквизиты организации уже изменены. Обновите данные.',
+          'FINANCE_VERSION_CONFLICT',
+        );
+      let input;
+      try {
+        input = require('../domain/finance-company-input').validateCompanyInput(
+          body,
+          previous,
+        );
+      } catch (error) {
+        if (error.code === 'FINANCE_COMPANY_INVALID')
+          invalid(error.message, error.code);
+        throw error;
+      }
+      if (
+        input.inn &&
+        (
+          await client.query(
+            'SELECT 1 FROM legal_entities WHERE inn=$1 AND id<>$2',
+            [input.inn, id],
+          )
+        ).rowCount
+      )
+        conflict(
+          'Организация с таким ИНН уже существует. Используйте существующую запись.',
+          'FINANCE_DUPLICATE_COMPANY',
+        );
+      const values = [
+        id,
+        input.name,
+        input.organizationKind,
+        input.inn,
+        input.kpp,
+        input.ogrn,
+        input.fullName,
+        input.address,
+      ];
+      let saved;
+      if (previous) {
+        saved = (
+          await client.query(
+            'UPDATE legal_entities SET name=$2,organization_kind=$3,inn=$4,kpp=$5,ogrn=$6,full_name=$7,address=$8,version=version+1 WHERE id=$1 AND version=$9 RETURNING *',
+            [...values, previous.version],
+          )
+        ).rows[0];
+        if (!saved)
+          conflict(
+            'Реквизиты организации уже изменены. Обновите данные.',
+            'FINANCE_VERSION_CONFLICT',
+          );
+      } else {
+        saved = (
+          await client.query(
+            'INSERT INTO legal_entities(id,name,organization_kind,inn,kpp,ogrn,full_name,address) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+            values,
+          )
+        ).rows[0];
+        // Reuse a region already authorized for this administrator. The current
+        // application requires a project and scope; neither needs a user setup step.
+        const source = [...scopes].sort(
+          (a, b) =>
+            a.regionId.localeCompare(b.regionId) ||
+            a.projectId.localeCompare(b.projectId) ||
+            a.responsibilityScopeId.localeCompare(b.responsibilityScopeId),
+        )[0];
+        const scope = {
+          legalEntityId: id,
+          regionId: source.regionId,
+          projectId: randomUUID(),
+          responsibilityScopeId: randomUUID(),
+          personalDataVisible: source.personalDataVisible === true,
+        };
+        await client.query(
+          'INSERT INTO projects(id,name,legal_entity_id,region_id) VALUES($1,$2,$3,$4)',
+          [scope.projectId, 'Основная деятельность', id, scope.regionId],
+        );
+        await client.query(
+          'INSERT INTO responsibility_scopes(id,project_id,name) VALUES($1,$2,$3)',
+          [scope.responsibilityScopeId, scope.projectId, 'Общие операции'],
+        );
+        await client.query(
+          'INSERT INTO access_grants(user_id,legal_entity_id,region_id,project_id,responsibility_scope_id,finance_visible,personal_data_visible) VALUES($1,$2,$3,$4,$5,true,$6)',
+          [actor.id, ...tuple(scope), scope.personalDataVisible],
+        );
+        affectedScopes = [scope];
+      }
+      const result = { ...companyRow(saved), complete: true, canEdit: true };
+      await this.auditEvent(
+        client,
+        actor,
+        affectedScopes[0],
+        previous ? 'company.updated' : 'company.created',
+        id,
+        {
+          before: previous,
+          after: companyRow(saved),
+          ...(!previous
+            ? {
+                createdGrant: {
+                  userId: actor.id,
+                  ...Object.fromEntries(
+                    tupleKeys.map((key) => [key, affectedScopes[0][key]]),
+                  ),
+                  financeVisible: true,
+                  personalDataVisible: affectedScopes[0].personalDataVisible,
+                },
+              }
+            : {}),
+        },
+      );
+      // A retry must still have every company scope, including the newly granted
+      // scope. Retaining an old unrelated grant never reveals this saved response.
+      return this.remember(
+        client,
+        actor,
+        body.idempotencyKey,
+        body,
+        'company.save',
+        result,
+        affectedScopes,
+      );
+    }).catch((error) => {
+      if (
+        error.code === '23505' &&
+        error.constraint === 'legal_entities_inn_unique'
+      )
+        conflict(
+          'Организация с таким ИНН уже существует. Используйте существующую запись.',
+          'FINANCE_DUPLICATE_COMPANY',
+        );
+      throw error;
+    });
   }
   resolveEntity(input, scopes) {
     const ids = [...new Set(scopes.map((scope) => scope.legalEntityId))];

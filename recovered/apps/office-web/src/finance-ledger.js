@@ -2269,12 +2269,24 @@ export function createFinanceLedgerWorkspace(
     );
   }
 
-  function Catalogs({ data, legalEntityId, busy, save }) {
-    const [kind, setKind] = useState('counterparties'),
-      [draft, setDraft] = useState(null),
+  function Catalogs({
+    data,
+    legalEntityId,
+    busy,
+    save,
+    kind,
+    setKind,
+    onCompanySaved,
+  }) {
+    const [draft, setDraft] = useState(null),
       [weights, setWeights] = useState({}),
       [error, setError] = useState('');
+    useEffect(() => {
+      setDraft(null);
+      setError('');
+    }, [kind]);
     const labels = {
+      companies: 'Свои компании',
       counterparties: 'Контрагенты',
       directions: 'Направления',
       accounts: 'Счета и кассы',
@@ -2282,13 +2294,20 @@ export function createFinanceLedgerWorkspace(
       classificationRules: 'Правила и топливные карты',
       plans: 'Регулярные платежи',
     };
-    const items = list(data.catalogs?.[kind]).filter(
+    const items = list(
+        kind === 'companies'
+          ? data.context?.legalEntities
+          : data.catalogs?.[kind],
+      ).filter(
         (item) =>
           (kind !== 'plans' || item.recurrence) &&
           (kind !== 'directions' || !item.system),
       ),
       entities = list(data.context?.legalEntities);
-    const canEdit = data.context?.permissions?.canEdit;
+    const canEdit =
+      kind === 'companies'
+        ? data.context?.permissions?.canManageCompanies
+        : data.context?.permissions?.canEdit;
     const scopes = list(data.context?.scopes).filter(
       (item) => item.legalEntityId === draft?.legalEntityId,
     );
@@ -2298,6 +2317,22 @@ export function createFinanceLedgerWorkspace(
       setDraft((old) => ({ ...old, [key]: value }));
     function edit(item = {}) {
       setError('');
+      if (kind === 'companies') {
+        setDraft({
+          ...(item.id ? { id: item.id } : {}),
+          version: item.version || 0,
+          name: item.name || '',
+          organizationKind: item.id
+            ? item.organizationKind || ''
+            : 'legal_entity',
+          inn: item.inn || '',
+          kpp: item.kpp || '',
+          ogrn: item.ogrn || '',
+          fullName: item.fullName || '',
+          address: item.address || '',
+        });
+        return;
+      }
       setDraft({
         name: '',
         legalEntityId:
@@ -2369,6 +2404,24 @@ export function createFinanceLedgerWorkspace(
     async function submit(event) {
       event.preventDefault();
       setError('');
+      if (kind === 'companies') {
+        const company = {
+          ...draft,
+          name: draft.name.trim(),
+          inn: draft.inn.trim(),
+          kpp:
+            draft.organizationKind === 'legal_entity' ? draft.kpp.trim() : '',
+          ogrn: draft.ogrn.trim(),
+          fullName: draft.fullName.trim(),
+          address: draft.address.trim(),
+        };
+        const result = await save('/companies', company, 'PUT');
+        if (result) {
+          setDraft(null);
+          onCompanySaved?.(result, !draft.id);
+        }
+        return;
+      }
       const body = { ...draft };
       try {
         if (
@@ -2498,8 +2551,19 @@ export function createFinanceLedgerWorkspace(
             ),
           ),
         ),
-        canEdit && button('Добавить запись', () => edit(), { disabled: busy }),
+        canEdit &&
+          button(
+            kind === 'companies' ? 'Добавить компанию' : 'Добавить запись',
+            () => edit(),
+            { disabled: busy },
+          ),
       ),
+      kind === 'companies' &&
+        h(
+          'p',
+          { className: 'muted' },
+          'Ваши юридические лица и ИП. После сохранения компания доступна в финансовых операциях и отчётах.',
+        ),
       kind === 'counterparties' &&
         h(
           'p',
@@ -2565,7 +2629,14 @@ export function createFinanceLedgerWorkspace(
       draft &&
         h(
           'form',
-          { onSubmit: submit, className: 'fl-catalog-form' },
+          {
+            onSubmit: submit,
+            className: 'fl-catalog-form',
+            'aria-label':
+              kind === 'companies'
+                ? 'Реквизиты своей компании'
+                : 'Запись справочника',
+          },
           h(
             'div',
             { className: 'fl-form-grid' },
@@ -2574,14 +2645,84 @@ export function createFinanceLedgerWorkspace(
               maxLength: 200,
               disabled: busy,
             }),
-            select(
-              'Компания записи',
-              draft.legalEntityId,
-              update('legalEntityId'),
-              entities,
-              'Выберите компанию',
-              { required: true, disabled: busy },
-            ),
+            kind !== 'companies' &&
+              select(
+                'Компания записи',
+                draft.legalEntityId,
+                update('legalEntityId'),
+                entities,
+                'Выберите компанию',
+                { required: true, disabled: busy },
+              ),
+            kind === 'companies' &&
+              h(
+                React.Fragment,
+                null,
+                select(
+                  'Тип компании',
+                  draft.organizationKind,
+                  (value) =>
+                    setDraft((old) => ({
+                      ...old,
+                      organizationKind: value,
+                      ...(value === 'sole_proprietor' ? { kpp: '' } : {}),
+                    })),
+                  [
+                    { id: 'legal_entity', name: 'Юридическое лицо' },
+                    {
+                      id: 'sole_proprietor',
+                      name: 'Индивидуальный предприниматель',
+                    },
+                  ],
+                  'Выберите тип',
+                  { required: true, disabled: busy },
+                ),
+                text('ИНН компании', draft.inn, update('inn'), {
+                  required: true,
+                  inputMode: 'numeric',
+                  pattern:
+                    draft.organizationKind === 'sole_proprietor'
+                      ? '[0-9]{12}'
+                      : '[0-9]{10}',
+                  maxLength:
+                    draft.organizationKind === 'sole_proprietor' ? 12 : 10,
+                  disabled: busy,
+                }),
+                draft.organizationKind === 'legal_entity' &&
+                  text('КПП компании', draft.kpp, update('kpp'), {
+                    inputMode: 'numeric',
+                    pattern: '[0-9]{9}',
+                    maxLength: 9,
+                    disabled: busy,
+                  }),
+                text(
+                  draft.organizationKind === 'sole_proprietor'
+                    ? 'ОГРНИП'
+                    : 'ОГРН',
+                  draft.ogrn,
+                  update('ogrn'),
+                  {
+                    inputMode: 'numeric',
+                    pattern:
+                      draft.organizationKind === 'sole_proprietor'
+                        ? '[0-9]{15}'
+                        : '[0-9]{13}',
+                    maxLength:
+                      draft.organizationKind === 'sole_proprietor' ? 15 : 13,
+                    disabled: busy,
+                  },
+                ),
+                text(
+                  'Полное наименование',
+                  draft.fullName,
+                  update('fullName'),
+                  { maxLength: 500, disabled: busy },
+                ),
+                text('Юридический адрес', draft.address, update('address'), {
+                  maxLength: 1000,
+                  disabled: busy,
+                }),
+              ),
             kind === 'counterparties' &&
               h(
                 React.Fragment,
@@ -3012,7 +3153,7 @@ export function createFinanceLedgerWorkspace(
             h(
               'button',
               { type: 'submit', className: 'button', disabled: busy },
-              'Сохранить запись',
+              kind === 'companies' ? 'Сохранить компанию' : 'Сохранить запись',
             ),
             button('Отмена', () => setDraft(null), { disabled: busy }),
           ),
@@ -3020,7 +3161,9 @@ export function createFinanceLedgerWorkspace(
       items.length
         ? table(
             labels[kind],
-            ['Название', 'Реквизиты / условия', 'Состояние', ''],
+            kind === 'companies'
+              ? ['Название', 'Реквизиты', 'Тип', '']
+              : ['Название', 'Реквизиты / условия', 'Состояние', ''],
             items.map((item) =>
               h(
                 'tr',
@@ -3041,26 +3184,40 @@ export function createFinanceLedgerWorkspace(
                         .filter(Boolean)
                         .join(' · ') || '—',
                 ),
-                h('td', null, item.archived ? 'Архив' : 'Действует'),
+                h(
+                  'td',
+                  null,
+                  kind === 'companies'
+                    ? {
+                        legal_entity: 'Юридическое лицо',
+                        sole_proprietor: 'ИП',
+                      }[item.organizationKind] || 'Тип не указан'
+                    : item.archived
+                      ? 'Архив'
+                      : 'Действует',
+                ),
                 h(
                   'td',
                   null,
                   canEdit &&
-                    item.canEdit !== false &&
+                    (kind === 'companies'
+                      ? item.canEdit === true
+                      : item.canEdit !== false) &&
                     h(
                       'div',
                       { className: 'fl-row-actions' },
                       button('Изменить', () => edit(item), { disabled: busy }),
-                      button(
-                        item.archived ? 'Восстановить' : 'В архив',
-                        () =>
-                          save(
-                            `/catalogs/${kind}`,
-                            { ...item, archived: !item.archived },
-                            'PUT',
-                          ),
-                        { disabled: busy },
-                      ),
+                      kind !== 'companies' &&
+                        button(
+                          item.archived ? 'Восстановить' : 'В архив',
+                          () =>
+                            save(
+                              `/catalogs/${kind}`,
+                              { ...item, archived: !item.archived },
+                              'PUT',
+                            ),
+                          { disabled: busy },
+                        ),
                     ),
                 ),
               ),
@@ -4260,6 +4417,7 @@ export function createFinanceLedgerWorkspace(
       [tab, setTab] = useState('reports'),
       [report, setReport] = useState('pnl'),
       [view, setView] = useState('ledger');
+    const [catalogKind, setCatalogKind] = useState('counterparties');
     const [calendarFilters, setCalendarFilters] = useState(() => {
       const end = new Date();
       end.setDate(end.getDate() + 30);
@@ -4463,6 +4621,14 @@ export function createFinanceLedgerWorkspace(
         h(
           'div',
           { className: 'fl-toolbar' },
+          button(
+            'Свои компании',
+            () => {
+              setCatalogKind('companies');
+              setView('catalogs');
+            },
+            { disabled: !data || locked },
+          ),
           button('Тарифы, зарплаты и 1С', () => setView('legacy')),
           button(
             view === 'catalogs' ? 'К финансам' : 'Справочники и распределение',
@@ -4532,9 +4698,24 @@ export function createFinanceLedgerWorkspace(
           view === 'catalogs'
             ? h(Catalogs, {
                 data,
+                kind: catalogKind,
+                setKind: setCatalogKind,
                 legalEntityId: filters.legalEntityId,
                 busy: locked,
                 save: mutate,
+                onCompanySaved: (company, created) => {
+                  if (created && company.id) {
+                    setFilters((old) => ({
+                      ...old,
+                      legalEntityId: company.id,
+                      directionId: '',
+                      counterpartyId: '',
+                    }));
+                    setOffset(0);
+                    setDebtOffset(0);
+                    setCalendarOffset(0);
+                  }
+                },
               })
             : h(
                 React.Fragment,
