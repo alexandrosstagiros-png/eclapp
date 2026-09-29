@@ -254,4 +254,4 @@ async function parseWorkbook(input, filename = '') {
       supplierPolicy: 'Пустой подрядчик означает «Не указан». Исходный признак «Своими силами» сохранён без подтверждения его смысла.' } };
 }
 
-module.exports = { parseWorkbook, MAX_FILE_BYTES, MAX_EXPANDED_BYTES };
+module.exports = { parseWorkbook, MAX_FILE_BYTES, MAX_EXPANDED_BYTES, checkZip, cellValue, cents, date, csvRecords };

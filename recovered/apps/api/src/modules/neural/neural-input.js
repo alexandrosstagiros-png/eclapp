@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 'use strict';
 const { BadRequestException } = require('@nestjs/common');
-const TASKS = Object.freeze(['conversation_summary', 'work_order_prices']);
+const TASKS = Object.freeze(['conversation_summary', 'work_order_prices', 'finance_classification']);
 const PROVIDERS = Object.freeze({
   openai: { name: 'OpenAI', keyEnv: 'OPENAI_API_KEY', models: ['gpt-6-sol', 'gpt-6-luna', 'gpt-6-astra'] },
   anthropic: { name: 'Anthropic', keyEnv: 'ANTHROPIC_API_KEY', models: ['claude-sonnet-5', 'claude-haiku-4-5', 'claude-opus-5-5'] },

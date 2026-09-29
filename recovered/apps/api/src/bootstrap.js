@@ -40,9 +40,14 @@ async function createApp() {
     const importBody = (0, express_1.json)({ limit: "512kb" });
     const calendarBody = (0, express_1.json)({ limit: "4mb" });
     const uploadBody = (0, express_1.json)({ limit: "14mb" });
+    const financeImportBody = (0, express_1.json)({ limit: "28mb" });
     const teamMessageBody = (0, express_1.json)({ limit: "36mb" });
     const teamMessageEditBody = (0, express_1.json)({ limit: "64kb" });
     app.use((req, res, next) => {
+        if (req.method === 'POST' && /^\/api\/v1\/finance\/ledger\/imports\/preview\/?$/.test(req.path))
+            return financeImportBody(req, res, next);
+        if (/^\/api\/v1\/finance\/ledger(?:\/|$)/.test(req.path))
+            return calendarBody(req, res, next);
         if (req.method === 'PUT' && /^\/api\/v1\/neural\/settings\/?$/.test(req.path))
             return importBody(req, res, next);
         if (req.method === 'POST' && /^\/api\/v1\/recruitment\/contracts\/documents\/[a-f0-9-]+\/sign\/?$/i.test(req.path))
@@ -83,7 +88,7 @@ async function createApp() {
     });
     app.enableCors({
         origin: config.allowedOrigins,
-        methods: ["GET", "POST", "PUT"],
+        methods: ["GET", "POST", "PUT", "PATCH"],
         allowedHeaders: ["Authorization", "Content-Type", "X-Dev-Auth-Key", "X-Session-Refresh"],
         credentials: true,
     });

@@ -5,6 +5,7 @@ import { createDevelopmentWorkspace } from "./development.js";
 import { createDriverRequests } from "./driver-requests.js";
 import { createTeamWorkspace, createNeuralSummary } from "./team.js";
 import { createNeuralWorkspace } from "./neural.js";
+import { createFinanceLedgerWorkspace } from "./finance-ledger.js";
 import { createTeamTasks } from "./team-tasks.js";
 import { createTeamOutcomes } from "./team-outcomes.js";
 import { createProfileUI } from "./profile.js";
@@ -27497,6 +27498,7 @@ const { useInspectionAttention, InspectionAttention, ManagedInspectionPhoto } = 
 const ChiefMechanicAccess = createChiefMechanicAccess({ React: h, jsx: n, request: ze });
 const { PlannerCreation, PlanningAccess, PlanningAccessEditor } = createEmployeePlanningAccess({ React: h, jsx: n, request: ze });
 const PlanningPanel = createPlanningPanel(h, { request: ze, download: Ho });
+const FinanceLedgerWorkspace = createFinanceLedgerWorkspace(h, { request: ze, LegacyFinance: jg });
 const onboardingPhotoComponents = createAttachmentPhotos({
   React: h,
   jsx: n,
@@ -28182,6 +28184,7 @@ function ij({
       canUseOnboarding(f.role) && (new URLSearchParams(window.location.search).get("section") === "onboarding" || (new URLSearchParams(window.location.search).get("section") === "recruitment" && new URLSearchParams(window.location.search).get("recruitmentTab") === "onboarding")) ? "onboarding" :
       new URLSearchParams(window.location.search).get("section") === "inspections" && ["driver", "mechanic", "dispatcher", "access_admin"].includes(f.role) ? "inspections" :
       new URLSearchParams(window.location.search).get("section") === "profile" ? "profile" :
+      new URLSearchParams(window.location.search).get("section") === "finance" && ["access_admin", "manager", "auditor", "dispatcher", "document_specialist"].includes(f.role) && f.grants.some(grant => grant.financeVisible) ? "finance" :
       new URLSearchParams(window.location.search).get("section") === "neural" && hasTeamAccess(f.role) ? "neural" :
       new URLSearchParams(window.location.search).get("section") === "birthdays" && f.role === "access_admin" && !f.impersonation ? "birthdays" :
       new URLSearchParams(window.location.search).get("section") === "team" && hasTeamAccess(f.role)
@@ -28226,7 +28229,7 @@ function ij({
     canFleet = ["access_admin", "manager", "mechanic", "auditor"].includes(f.role) && f.grants.some(grant => grant.financeVisible),
     M = ["driver", "mechanic", "dispatcher", "access_admin"].includes(f.role),
     ee =
-      (f.role === "dispatcher" || f.role === "document_specialist") &&
+      ["access_admin", "manager", "auditor", "dispatcher", "document_specialist"].includes(f.role) &&
       f.grants.some((_) => _.financeVisible),
     te = [
       ...(L ? [{ id: "access", label: "Сотрудники" }] : []),
@@ -28764,7 +28767,7 @@ function ij({
                     }),
                   b === "finance" &&
                     ee &&
-                    n.jsx(jg, { token: d.accessToken, actor: f, onExpired: g }),
+                    n.jsx(FinanceLedgerWorkspace, { token: d.accessToken, actor: f, onExpired: g }),
                   b === "payroll" &&
                     f.role === "driver" &&
                     n.jsx(Eg, { token: d.accessToken, onExpired: g }),
