@@ -679,6 +679,30 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       .click();
     const nativeResult = await nativeResponse;
     assert.equal(nativeResult.status(), 201, await nativeResult.text());
+    const recurringRows = (await nativeResult.json()).rows.filter((row) =>
+      row.operation?.description?.includes('Регулярная связь'),
+    );
+    assert.ok(recurringRows.length >= 1);
+    assert.equal(
+      new Set(recurringRows.map((row) => row.sourceId)).size,
+      recurringRows.length,
+    );
+    assert.equal(
+      new Set(recurringRows.map((row) => row.operation.date.slice(0, 7))).size,
+      recurringRows.length,
+    );
+    assert.ok(
+      recurringRows.every(
+        (row) =>
+          row.sourceId === row.operation.source.id &&
+          row.operation.amountKopecks === 200,
+      ),
+    );
+    assert.ok(
+      recurringRows.every(
+        (row) => row.operation.articleId === communicationArticle.id,
+      ),
+    );
     await native
       .getByRole('table', {
         name: 'Предварительная проверка импорта',
@@ -686,6 +710,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
       })
       .getByRole('row')
       .filter({ hasText: 'Регулярная связь' })
+      .first()
       .waitFor();
     await native
       .getByRole('button', { name: 'Закончить проверку', exact: true })
